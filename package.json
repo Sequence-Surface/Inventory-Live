@@ -1,0 +1,13 @@
+{
+  "name": "inventory-mern",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Inventory Intelligence — MERN edition (root runner)",
+  "scripts": {
+    "setup": "npm --prefix server install && npm --prefix client install && npm --prefix client run build",
+    "start": "npm --prefix server start",
+    "go": "npm run setup && npm start",
+    "dev:server": "npm --prefix server run dev",
+    "dev:client": "npm --prefix client run dev"
+  }
+}

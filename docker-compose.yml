@@ -1,0 +1,23 @@
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "27017:27017"
+
+  app:
+    build: .
+    depends_on:
+      - mongo
+    environment:
+      PORT: 4000
+      MONGODB_URI: mongodb://mongo:27017/inventory_intelligence
+      # Optional: server-side Anthropic key fallback for the AI chat.
+      # ANTHROPIC_API_KEY: ""
+    ports:
+      - "4000:4000"
+
+volumes:
+  mongo_data:
