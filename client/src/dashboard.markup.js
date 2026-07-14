@@ -466,8 +466,25 @@ export const DASHBOARD_HTML = `
   </div>
 </section>
 
-<!-- 07 Master mapping — HIDDEN (replaced by Google Sheets Sync). JS still references its IDs so the section stays in the DOM but is not visible. -->
-<section class="section" style="display:none">
+<!-- 06.9 Data controls — clear everything to a blank dashboard before importing your own -->
+<section class="section">
+  <div class="section-head">
+    <span class="section-num">DATA /</span>
+    <span class="section-title">Start <em>fresh</em></span>
+    <span class="section-rule"></span>
+  </div>
+  <div class="panel reveal reveal-1">
+    <h3 class="panel-title">Clear all data</h3>
+    <p class="panel-sub">Wipes the built-in demo catalog <strong>and</strong> every uploaded override (master, stock, sales, purchases) — the dashboard goes completely empty so you can build it up from your own uploads below. This cannot be undone.</p>
+    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+      <button class="reset-btn" id="clearAllDataBtn" style="display:inline-block; background:rgba(255,74,92,0.12); border-color:rgba(255,74,92,0.5); color:var(--red);">⨯ Clear all data (blank dashboard)</button>
+      <span id="clearAllDataStatus" style="font-family:var(--mono); font-size:11px; color:var(--text-3);"></span>
+    </div>
+  </div>
+</section>
+
+<!-- 07 Master mapping — direct CSV/Excel upload (also available via Google Sheets Sync). -->
+<section class="section">
   <div class="section-head">
     <span class="section-num">07 /</span>
     <span class="section-title">Master parent-child <em>mapping</em></span>
@@ -491,15 +508,15 @@ export const DASHBOARD_HTML = `
         </div>
       </div>
       <input type="file" accept=".csv,.tsv,.txt,.xlsx,.xls" class="upload-input" id="masterUpload">
-      <button class="upload-btn" id="masterTemplateBtn" title="Download a blank CSV template with the correct headers">↓ Template</button>
+      <button class="upload-btn" id="masterTemplateBtn" title="Download a ready-to-fill Excel (.xlsx) template with the correct headers">↓ Excel Template</button>
       <button class="upload-btn" id="uploadBtnTrigger">Choose CSV / Excel</button>
       <button class="reset-btn" id="masterReset" style="display:none;">Clear & reset</button>
     </div>
   </div>
 </section>
 
-<!-- 08 Stock data upload — HIDDEN (replaced by Google Sheets Sync). JS still references its IDs. -->
-<section class="section" style="display:none">
+<!-- 08 Stock data upload — direct CSV/Excel upload (also available via Google Sheets Sync). -->
+<section class="section">
   <div class="section-head">
     <span class="section-num">08 /</span>
     <span class="section-title">Stock data <em>upload</em></span>
@@ -518,7 +535,7 @@ export const DASHBOARD_HTML = `
         </div>
       </div>
       <input type="file" accept=".csv,.tsv,.txt,.xlsx,.xls" class="upload-input" id="stockUpload">
-      <button class="upload-btn" id="stockTemplateBtn" title="Download a blank CSV template with the correct headers">↓ Template</button>
+      <button class="upload-btn" id="stockTemplateBtn" title="Download a ready-to-fill Excel (.xlsx) template with the correct headers">↓ Excel Template</button>
       <button class="upload-btn" id="stockUploadBtnTrigger">Choose CSV / Excel</button>
       <button class="reset-btn" id="stockReset" style="display:none;">Clear & reset</button>
     </div>
@@ -526,32 +543,44 @@ export const DASHBOARD_HTML = `
   </div>
 </section>
 
-<!-- 09 Sales & Purchase history — HIDDEN (replaced by Google Sheets Sync). JS still references its IDs. -->
-<section class="section" style="display:none">
+<!-- 09 Sales & Purchase history — direct CSV/Excel upload (also available via Google Sheets Sync). -->
+<section class="section">
   <div class="section-head">
     <span class="section-num">09 /</span>
     <span class="section-title">Sales &amp; Purchase <em>history</em> (24 months)</span>
     <span class="section-rule"></span>
   </div>
   <div class="panel reveal reveal-1">
-    <h3 class="panel-title">Upload your monthly sales &amp; purchase data</h3>
-    <p class="panel-sub">CSV or Excel (.xlsx / .xls) · matches by <strong style="color:var(--accent)">parent_code</strong> · one row per parent per month · recalculates annual sales, avg monthly, days of cover, ABC, all KPIs · saved locally across reloads · Use <strong style="color:var(--accent)">↓ Template</strong> to get a pre-filled starter file with all 24 months</p>
+    <h3 class="panel-title">Upload your monthly sales &amp; purchase data — as separate files</h3>
+    <p class="panel-sub">CSV or Excel (.xlsx / .xls) · matches by <strong style="color:var(--accent)">parent_code</strong> · one row per parent per month · upload <strong style="color:var(--accent)">Sales</strong> and <strong style="color:var(--accent)">Purchases</strong> independently — each merges into the same 24-month history without overwriting the other · recalculates annual sales, avg monthly, days of cover, ABC, all KPIs · saved locally across reloads · Use <strong style="color:var(--accent)">↓ Excel Template</strong> in each box for a pre-filled starter</p>
 
-    <div class="upload-zone" id="histUploadZone">
-      <div class="upload-meta">
-        <div class="upload-status" id="histUploadStatus">No history override loaded — using embedded 24-month data</div>
-        <div class="upload-spec">
-          Required: <strong style="color:var(--accent)">parent_code</strong>, <strong style="color:var(--accent)">month</strong>, and at least one of <strong style="color:var(--accent)">sales</strong> or <strong style="color:var(--accent)">purchases</strong>.<br>
-          Month formats accepted: <span style="color:var(--text-2)">"2025-04" · "Apr-25" · "Apr 2025" · "April 2025" · "4/2025" · "04/25"</span><br>
-          Aliases — sales: <span style="color:var(--text-2)">qty_sold, sold, sales_qty, s</span> · purchases: <span style="color:var(--text-2)">qty_bought, bought, purchase, purchase_qty, p</span><br>
-          Active 24-month window: <strong style="color:var(--accent)" id="histWindowLabel">—</strong>
-        </div>
-      </div>
-      <input type="file" accept=".csv,.tsv,.txt,.xlsx,.xls" class="upload-input" id="histUpload">
-      <button class="upload-btn" id="histTemplateBtn" title="Download a blank CSV template with the correct headers">↓ Template</button>
-      <button class="upload-btn" id="histUploadBtnTrigger">Choose CSV / Excel</button>
-      <button class="reset-btn" id="histReset" style="display:none;">Clear & reset</button>
+    <div class="upload-status" id="histUploadStatus" style="margin-bottom:6px;">No history override loaded — using embedded 24-month data</div>
+    <div class="upload-spec" style="margin-bottom:14px;">
+      Sales file columns: <strong style="color:var(--accent)">parent_code, month, sales</strong> · Purchases file columns: <strong style="color:var(--accent)">parent_code, month, purchases</strong><br>
+      Month formats accepted: <span style="color:var(--text-2)">"2025-04" · "Apr-25" · "Apr 2025" · "April 2025" · "4/2025" · "04/25"</span> · Active 24-month window: <strong style="color:var(--accent)" id="histWindowLabel">—</strong>
     </div>
+
+    <div class="hist-split" style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+      <div class="upload-zone" id="salesUploadZone" style="border-left:3px solid rgba(58,255,182,0.6);">
+        <div class="upload-meta">
+          <div class="upload-status" id="salesUploadStatus"><strong>Sales</strong> — no file loaded</div>
+        </div>
+        <input type="file" accept=".csv,.tsv,.txt,.xlsx,.xls" class="upload-input" id="salesUpload">
+        <button class="upload-btn" id="salesTemplateBtn" title="Download a ready-to-fill Excel (.xlsx) SALES template with all 24 months">↓ Excel Template</button>
+        <button class="upload-btn" id="salesUploadBtnTrigger">Choose Sales file</button>
+      </div>
+
+      <div class="upload-zone" id="purchUploadZone" style="border-left:3px solid rgba(255,92,58,0.6);">
+        <div class="upload-meta">
+          <div class="upload-status" id="purchUploadStatus"><strong>Purchases</strong> — no file loaded</div>
+        </div>
+        <input type="file" accept=".csv,.tsv,.txt,.xlsx,.xls" class="upload-input" id="purchUpload">
+        <button class="upload-btn" id="purchTemplateBtn" title="Download a ready-to-fill Excel (.xlsx) PURCHASES template with all 24 months">↓ Excel Template</button>
+        <button class="upload-btn" id="purchUploadBtnTrigger">Choose Purchases file</button>
+      </div>
+    </div>
+
+    <div style="margin-top:12px;"><button class="reset-btn" id="histReset" style="display:none;">Clear &amp; reset history</button></div>
     <div id="histUploadDetail" style="font-family:var(--mono); font-size:10px; color:var(--text-3); margin-top:10px; min-height:14px;"></div>
   </div>
 </section>
