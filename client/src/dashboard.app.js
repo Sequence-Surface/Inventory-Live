@@ -11,6 +11,25 @@ const Chart = window.Chart;
 const XLSX = window.XLSX;
 
 
+// Persist the current in-memory dataset D (with all uploaded data applied) back
+// into MongoDB's main `datasets` document, so the database is the single source
+// of truth and uploads show up on every device — not just this browser.
+// Debounced so a burst of uploads only writes once.
+let _persistTimer = null;
+function persistDatasetToMongo() {
+  if (_persistTimer) clearTimeout(_persistTimer);
+  _persistTimer = setTimeout(() => {
+    try {
+      fetch('/api/data', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(D),
+      }).then(r => { if (!r.ok) console.warn('[persist] save failed HTTP', r.status); })
+        .catch(e => console.warn('[persist] save error', e));
+    } catch (e) { console.warn('[persist] save threw', e); }
+  }, 400);
+}
+
 const fmt = (n) => n == null ? '—' : Number(n).toLocaleString('en-IN');
 const fmtCompact = (n) => (n == null || n === 0) ? null : Number(n).toLocaleString('en-IN');
 const fmtDays = (n) => n == null ? '—' : (n >= 999 ? '∞' : Math.round(n));
@@ -253,7 +272,7 @@ const kpiHtml = [
   { label: 'Parents · Children', value: fmt(k.totalProducts) + ' · ' + fmt(k.totalChildren), sub: k.totalFolders + ' folders · ' + k.totalCategories + ' categories', cls: '' },
   { label: 'Annual sales (units)', value: fmt(k.annualSales), sub: 'Apr 25 — Apr 26', cls: 'good' },
   { label: 'On hand · Pipeline', value: fmt(k.totalStock), sub: '+' + fmt(k.inTransitTotal) + ' transit · +' + fmt(k.pendingTotal) + ' pending', cls: 'info' },
-  { label: 'Class A SKUs', value: fmt(k.classACount), sub: '80% of revenue · ' + Math.round(k.classACount/k.totalProducts*100) + '% of SKUs', cls: 'info' },
+  { label: 'Class A SKUs', value: fmt(k.classACount), sub: '80% of revenue · ' + (k.totalProducts ? Math.round(k.classACount/k.totalProducts*100) : 0) + '% of SKUs', cls: 'info' },
   { label: 'Net reorder need', value: fmt(k.netReorderQty), sub: fmt(k.netReorderProducts) + ' SKUs · saved ' + fmt(k.reorderSavedByPipeline) + ' from pipeline', cls: 'warn' },
   { label: 'Critical stock', value: fmt(k.criticalCount), sub: 'less than 15 days cover · ' + fmt(k.criticalImprovedCount) + ' covered by pipeline', cls: 'danger' },
   { label: 'Bulk-order anomalies', value: fmt(k.bulkAnomalyCount), sub: 'unusual purchase spikes', cls: 'warn' },
@@ -268,7 +287,7 @@ document.getElementById('kpis').innerHTML = kpiHtml.map((x, i) =>
 
 // ===== Insights =====
 document.getElementById('aggInsightText').innerHTML =
-  `Across all SKUs, total purchases of <strong>${fmt(D.aggP.reduce((a,b)=>a+b,0))}</strong> units against sales of <strong>${fmt(D.aggS.reduce((a,b)=>a+b,0))}</strong> units in 24 months. Class A drives <strong>${fmt(k.classASales)}</strong> units (<strong>${Math.round(k.classASales/k.annualSales*100)}%</strong>) from just <strong>${fmt(k.classACount)}</strong> SKUs.`;
+  `Across all SKUs, total purchases of <strong>${fmt(D.aggP.reduce((a,b)=>a+b,0))}</strong> units against sales of <strong>${fmt(D.aggS.reduce((a,b)=>a+b,0))}</strong> units in 24 months. Class A drives <strong>${fmt(k.classASales)}</strong> units (<strong>${k.annualSales ? Math.round(k.classASales/k.annualSales*100) : 0}%</strong>) from just <strong>${fmt(k.classACount)}</strong> SKUs.`;
 
 document.getElementById('actionInsightText').innerHTML =
   `<strong>${fmt(k.criticalCount)}</strong> critical-stock SKUs detected — but <strong>${fmt(k.criticalImprovedCount)}</strong> of those have stock already in transit or pending at factory. Net reorder need after accounting for pipeline: <strong>${fmt(k.netReorderQty)}</strong> units across <strong>${fmt(k.netReorderProducts)}</strong> SKUs (saved <strong>${fmt(k.reorderSavedByPipeline)}</strong> units of double-ordering). <strong>${fmt(k.bulkAnomalyCount)}</strong> SKUs show bulk-purchase spikes worth reviewing.`;
@@ -3185,6 +3204,28 @@ function downloadCsv(filename, rows) {
   URL.revokeObjectURL(url);
 }
 
+// Download an array-of-rows as a real .xlsx workbook (falls back to CSV if SheetJS
+// isn't loaded). Used by the "↓ Template" buttons so you get an Excel file you can
+// open, fill in, and upload straight back into the matching section.
+function downloadXlsx(filename, sheetName, rows) {
+  const useXlsx = (typeof XLSX !== 'undefined' && XLSX && XLSX.utils && XLSX.writeFile);
+  if (!useXlsx) {
+    downloadCsv(filename.replace(/\.xlsx$/i, '.csv'), rows);
+    return;
+  }
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  // Auto-size each column to its widest cell so headers stay readable in Excel.
+  const widths = [];
+  rows.forEach(r => r.forEach((cell, i) => {
+    const len = String(cell == null ? '' : cell).length;
+    if (!widths[i] || widths[i] < len) widths[i] = len;
+  }));
+  ws['!cols'] = widths.map(w => ({ wch: Math.min(Math.max((w || 0) + 2, 10), 40) }));
+  XLSX.utils.book_append_sheet(wb, ws, (sheetName || 'Sheet1').slice(0, 31));
+  XLSX.writeFile(wb, filename);
+}
+
 document.getElementById('dlReorder').addEventListener('click', () => {
   const filtered = getFilteredProducts().filter(p => p.r > 0).sort((a, b) => {
     if (PRIORITIES[a.pr] !== PRIORITIES[b.pr]) return PRIORITIES[a.pr].localeCompare(PRIORITIES[b.pr]);
@@ -3452,7 +3493,7 @@ document.getElementById('masterTemplateBtn').addEventListener('click', () => {
     rows.push([2, 'SAMPLE-TRIM', '2022-11-15', 'Acme Imports', 'ACME', 'Notions', 'Buttons', 'Trims', 'TRM-T01', '2023-01-20', 'Trims', 'B', 'all']);
     rows.push([3, 'SAMPLE-NEW', '2026-03-01', 'Acme Imports', 'ACME', 'New Imports', 'Sample SKUs', 'New Imports', 'NI-N01', '2026-03-22', 'New Imports', 'C', '']);
   }
-  downloadCsv('Template_Master_ParentChild.csv', rows);
+  downloadXlsx('Template_Master_ParentChild.xlsx', 'Master Mapping', rows);
 });
 
 document.getElementById('stockTemplateBtn').addEventListener('click', () => {
@@ -3468,21 +3509,32 @@ document.getElementById('stockTemplateBtn').addEventListener('click', () => {
     rows.push(['EXAMPLE-PNA', 0, 0, 0, 'N', 'Y', '2026-07-15']);
     rows.push(['OLD-SKU-X', 0, 0, 0, 'Y', 'N', '']);
   }
-  downloadCsv('Template_Stock_Data.csv', rows);
+  downloadXlsx('Template_Stock_Data.xlsx', 'Stock Data', rows);
 });
 
-document.getElementById('histTemplateBtn').addEventListener('click', () => {
+document.getElementById('salesTemplateBtn').addEventListener('click', () => {
   const sample = sampleProductForTemplate();
   const code = sample ? sample.n : 'SAMPLE-001';
-  const headers = ['parent_code', 'month', 'sales', 'purchases'];
+  const headers = ['parent_code', 'month', 'sales'];
   const rows = [headers];
   // Include all 24 months so the user sees the expected month-format and full window
   D.months.forEach((label, idx) => {
     const s = sample && Array.isArray(sample.s) ? (sample.s[idx] || 0) : '';
-    const p = sample && Array.isArray(sample.p) ? (sample.p[idx] || 0) : '';
-    rows.push([code, label, s, p]);
+    rows.push([code, label, s]);
   });
-  downloadCsv('Template_Sales_Purchase_History.csv', rows);
+  downloadXlsx('Template_Sales_History.xlsx', 'Sales', rows);
+});
+
+document.getElementById('purchTemplateBtn').addEventListener('click', () => {
+  const sample = sampleProductForTemplate();
+  const code = sample ? sample.n : 'SAMPLE-001';
+  const headers = ['parent_code', 'month', 'purchases'];
+  const rows = [headers];
+  D.months.forEach((label, idx) => {
+    const p = sample && Array.isArray(sample.p) ? (sample.p[idx] || 0) : '';
+    rows.push([code, label, p]);
+  });
+  downloadXlsx('Template_Purchase_History.xlsx', 'Purchases', rows);
 });
 
 // ===== Master upload =====
@@ -3750,6 +3802,7 @@ document.getElementById('masterUpload').addEventListener('change', (e) => {
       return;
     }
     applyMasterOverride(result.map, file.name, result.zonesByFolder);
+    persistDatasetToMongo();
   }).catch(err => alert('Error: ' + (err.message || err)));
   e.target.value = '';
 });
@@ -3953,6 +4006,7 @@ function handleStockFile(file) {
     document.getElementById('stockUploadDetail').innerHTML = notes.join(' · ');
     document.getElementById('stockReset').style.display = '';
     rerender();
+    persistDatasetToMongo();
   }).catch(err => {
     setStockStatus('Error: ' + (err.message || 'failed to parse file'), 'err');
     document.getElementById('stockUploadDetail').textContent = '';
@@ -4230,6 +4284,10 @@ function clearHistoryOverride() {
   setHistStatus('No history override loaded — using embedded 24-month data', 'idle');
   document.getElementById('histReset').style.display = 'none';
   document.getElementById('histUploadDetail').textContent = '';
+  const sEl = document.getElementById('salesUploadStatus');
+  if (sEl) sEl.innerHTML = '<strong>Sales</strong> — no file loaded';
+  const pEl = document.getElementById('purchUploadStatus');
+  if (pEl) pEl.innerHTML = '<strong>Purchases</strong> — no file loaded';
   rerender();
 }
 
@@ -4260,28 +4318,100 @@ function handleHistFile(file) {
   });
 }
 
+// Upload a SALES-only or PURCHASES-only file. Each merges into the shared
+// historyOverride: a sales upload fills the `s` array, a purchases upload fills
+// the `p` array, and neither clobbers the other — so you can upload them
+// separately (or re-upload just one) and they combine into one 24-month history.
+function handleHistFileTyped(file, valueType) {
+  if (!file) return;
+  const isPurch = valueType === 'purchases';
+  const label = isPurch ? 'Purchases' : 'Sales';
+  const key = isPurch ? 'p' : 's';
+  const subStatusId = isPurch ? 'purchUploadStatus' : 'salesUploadStatus';
+  const subStatus = document.getElementById(subStatusId);
+  readFileAsCSVText(file).then(text => {
+    const parsed = parseHistoryCSV(text, valueType);
+    if (!historyOverride || !historyOverride.byCode) {
+      historyOverride = { byCode: {}, count: 0, parentCount: 0, fileName: '' };
+    }
+    Object.keys(parsed.byCode).forEach(code => {
+      if (!historyOverride.byCode[code]) {
+        historyOverride.byCode[code] = { s: new Array(24).fill(null), p: new Array(24).fill(null) };
+      }
+      const src = parsed.byCode[code][key];
+      for (let i = 0; i < 24; i++) if (src[i] != null) historyOverride.byCode[code][key][i] = src[i];
+    });
+    historyOverride.count = (historyOverride.count || 0) + parsed.count;
+    historyOverride.parentCount = Object.keys(historyOverride.byCode).length;
+    historyOverride.uploadedAt = new Date().toISOString();
+    historyOverride.fileName = file.name;
+    const { matched, unmatched } = applyHistoryOverride(historyOverride);
+    saveHistoryOverride();
+    if (subStatus) subStatus.innerHTML = `<strong>${label}</strong> — <span style="color:var(--green)">${fmt(parsed.count)}</span> rows · ${fmt(parsed.parentCount)} parents · <span style="color:var(--accent)">${file.name}</span>`;
+    setHistStatus(`<strong>${label} loaded</strong> — <strong>${fmt(parsed.parentCount)}</strong> parents in this file · <strong style="color:var(--green)">${fmt(matched)}</strong> total matched to products`, 'ok');
+    const skipNotes = [];
+    if (parsed.skippedMonth > 0) skipNotes.push(`${fmt(parsed.skippedMonth)} row(s) had unrecognized month`);
+    if (parsed.skippedBlank > 0) skipNotes.push(`${fmt(parsed.skippedBlank)} row(s) had blank parent_code`);
+    if (unmatched > 0) skipNotes.push(`${fmt(unmatched)} products kept their original data (no match)`);
+    document.getElementById('histUploadDetail').innerHTML = skipNotes.join(' · ') || `${label} rows applied cleanly`;
+    document.getElementById('histReset').style.display = '';
+    rerender();
+    persistDatasetToMongo();
+  }).catch(err => {
+    if (subStatus) subStatus.innerHTML = `<strong>${label}</strong> — <span style="color:var(--red)">Error: ${err.message || 'failed to parse'}</span>`;
+  });
+}
+
 // Wire up
 document.getElementById('histWindowLabel').textContent = `${D.months[0]} → ${D.months[D.months.length - 1]}`;
-document.getElementById('histUploadBtnTrigger').addEventListener('click', () => {
-  document.getElementById('histUpload').click();
-});
-document.getElementById('histUpload').addEventListener('change', (e) => {
-  const f = e.target.files[0];
-  if (f) handleHistFile(f);
-  e.target.value = '';
+[{ kind: 'sales', type: 'sales' }, { kind: 'purch', type: 'purchases' }].forEach(({ kind, type }) => {
+  const input = document.getElementById(kind + 'Upload');
+  const trigger = document.getElementById(kind + 'UploadBtnTrigger');
+  const zone = document.getElementById(kind + 'UploadZone');
+  if (trigger && input) trigger.addEventListener('click', () => input.click());
+  if (input) input.addEventListener('change', (e) => {
+    const f = e.target.files[0];
+    if (f) handleHistFileTyped(f, type);
+    e.target.value = '';
+  });
+  if (zone) {
+    ['dragenter','dragover'].forEach(ev => zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.add('dragover'); }));
+    ['dragleave','drop'].forEach(ev => zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.remove('dragover'); }));
+    zone.addEventListener('drop', (e) => {
+      const f = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) handleHistFileTyped(f, type);
+    });
+  }
 });
 document.getElementById('histReset').addEventListener('click', () => {
-  if (!confirm('Clear uploaded history and revert to embedded 24-month values?')) return;
+  if (!confirm('Clear uploaded history (both sales and purchases) and revert to embedded 24-month values?')) return;
   clearHistoryOverride();
 });
-(function setupHistDrag() {
-  const z = document.getElementById('histUploadZone');
-  if (!z) return;
-  ['dragenter','dragover'].forEach(ev => z.addEventListener(ev, (e) => { e.preventDefault(); z.classList.add('dragover'); }));
-  ['dragleave','drop'].forEach(ev => z.addEventListener(ev, (e) => { e.preventDefault(); z.classList.remove('dragover'); }));
-  z.addEventListener('drop', (e) => {
-    const f = e.dataTransfer.files && e.dataTransfer.files[0];
-    if (f) handleHistFile(f);
+
+// ===== Clear all data — wipe the catalog + all overrides to a blank dashboard =====
+(function setupClearAllData() {
+  const btn = document.getElementById('clearAllDataBtn');
+  if (!btn) return;
+  const status = document.getElementById('clearAllDataStatus');
+  btn.addEventListener('click', async () => {
+    if (!confirm('This permanently deletes the demo catalog AND all your uploaded data (master, stock, sales, purchases), leaving a completely blank dashboard. Continue?')) return;
+    if (!confirm('Are you absolutely sure? This cannot be undone.')) return;
+    if (status) status.textContent = 'Clearing…';
+    try {
+      const res = await fetch('/api/data/reset', { method: 'POST' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      // Remove local override keys too (native removeItem also mirrors the delete
+      // to the server). UI prefs (theme, demand method) and AI settings are kept.
+      ['inventoryMasterOverride', 'inventoryStockOverride', 'inventoryHistoryOverride',
+       'inventoryReorderEdits', 'inventoryManualReorder', 'inventoryFolderZones',
+       'inventoryParentLaunchDates', 'inventoryDiscontinued', 'inventoryPna',
+       'inventoryReorderExcluded', 'inventoryActiveZoneBucket'
+      ].forEach(k => { try { localStorage.removeItem(k); } catch (e) {} });
+      if (status) status.textContent = 'Cleared. Reloading…';
+      setTimeout(() => location.reload(), 400);
+    } catch (err) {
+      if (status) status.textContent = 'Error: ' + (err.message || 'failed to clear');
+    }
   });
 })();
 // Restore previous history override from localStorage
