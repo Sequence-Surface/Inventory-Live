@@ -3956,7 +3956,7 @@ function isRawProductMaster(objects) {
 }
 // Transform raw rows → { map, stats }. Identity/code = Product Name (per user's decision).
 function transformProductMasterRaw(objects) {
-  const empty = { map: {}, stats: { parents: 0, children: 0, standalone: 0 } };
+  const empty = { map: {}, stats: { parents: 0, children: 0, deleted: 0 } };
   if (!objects || !objects.length) return empty;
   const sampleKeys = Object.keys(objects[0]);
   const findKey = (target) => sampleKeys.find(k => String(k).trim().toLowerCase() === target) || null;
@@ -3978,8 +3978,8 @@ function transformProductMasterRaw(objects) {
   objects.forEach(r => { const id = num(r[kId]); if (id != null) byId[id] = r; });
 
   const map = {};
-  const idIndex = {};   // every ProductId (parent or child) → its parent's Product Name (identity code)
-  let children = 0, standalone = 0;
+  const idIndex = {};   // every kept ProductId (parent or child) → its parent's Product Name (identity code)
+  let children = 0, deleted = 0;
   function ensureParent(pid) {
     if (map[pid]) return map[pid];
     const prow = byId[pid];
@@ -3999,12 +3999,11 @@ function transformProductMasterRaw(objects) {
     const id = num(r[kId]);
     if (id == null) return;
     const ppRaw = num(r[kParent]);
-    // Effective parent: a valid, non-zero Parent Product that exists in the file → that parent;
-    // otherwise (blank / 0 / orphan) the product is STANDALONE — its own parent. (Nothing dropped.)
-    const hasParent = (ppRaw != null && ppRaw !== 0 && byId[ppRaw]);
-    const pid = hasParent ? ppRaw : id;
-    if (!hasParent) standalone++;
-    const parent = ensureParent(pid);
+    // Strict rule (per user): a parent is a row where ProductId === Parent Product; a child references
+    // its parent's ProductId. Rows with a blank/0 Parent Product, or whose Parent Product points to a
+    // missing row (orphan), have NO valid parent → they are DELETED (not kept as standalone).
+    if (ppRaw == null || ppRaw === 0 || !byId[ppRaw]) { deleted++; return; }
+    const parent = ensureParent(ppRaw);   // the row where ProductId === Parent Product
     parent.children.push({
       code: str(r[kName]),
       folder: '',
@@ -4016,7 +4015,7 @@ function transformProductMasterRaw(objects) {
     children++;
   });
 
-  return { map, idIndex, stats: { parents: Object.keys(map).length, children, standalone } };
+  return { map, idIndex, stats: { parents: Object.keys(map).length, children, deleted } };
 }
 // Build a downloadable cleaned file in the dashboard's clean schema (+ product_type).
 function downloadCleanedMaster(map) {
@@ -4051,8 +4050,8 @@ function renderMasterPreview(stats, map) {
       `<td class="num">${fmt(e.children.length)}</td>` +
       `</tr>`;
   });
-  const droppedNote = (stats.standalone)
-    ? ` · <span style="color:var(--text-3)">incl. ${fmt(stats.standalone)} standalone (no parent)</span>`
+  const droppedNote = (stats.deleted)
+    ? ` · <span style="color:var(--text-3)">deleted ${fmt(stats.deleted)} rows with no parent</span>`
     : '';
   el.innerHTML =
     `<div class="master-preview-summary" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px;">` +
