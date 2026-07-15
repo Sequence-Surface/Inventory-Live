@@ -5252,25 +5252,26 @@ document.getElementById('histReset').addEventListener('click', () => {
 
 // ===== Clear all data — wipe the catalog + all overrides to a blank dashboard =====
 // ===== Sync from MongoDB — re-pull the latest saved dataset and reload the dashboard =====
+// Wired to the fixed top-right button. Verifies the DB is reachable, then reloads so the whole
+// dashboard re-initializes from the freshly-fetched, cleaned data (rehydrating real-data mode + index).
 (function setupSyncMongo() {
-  const btn = document.getElementById('syncMongoBtn');
+  const btn = document.getElementById('syncMongoBtnTop');
   if (!btn) return;
-  const status = document.getElementById('syncMongoStatus');
+  const original = btn.textContent;
   btn.addEventListener('click', async () => {
-    if (status) { status.style.color = 'var(--text-3)'; status.textContent = 'Syncing from MongoDB…'; }
+    btn.disabled = true; btn.classList.add('syncing'); btn.textContent = '⟳ Syncing…';
     showLoader('Syncing latest data from MongoDB…');
     try {
-      // Verify the DB is reachable and has a dataset, then reload so the whole dashboard
-      // re-initializes from the freshly-fetched, cleaned data (rehydrating real-data mode + index).
       const res = await fetch('/api/data', { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       if (!data || !Array.isArray(data.products)) throw new Error('No dataset found in MongoDB');
-      if (status) { status.style.color = 'var(--green)'; status.textContent = `Fetched ${fmt(data.products.length)} products — reloading…`; }
+      btn.textContent = `⟳ Fetched ${fmt(data.products.length)} — reloading…`;
       setTimeout(() => location.reload(), 250);
     } catch (e) {
       hideLoader();
-      if (status) { status.style.color = 'var(--red)'; status.textContent = 'Sync failed: ' + (e.message || e); }
+      btn.disabled = false; btn.classList.remove('syncing'); btn.textContent = original;
+      alert('Sync from MongoDB failed: ' + (e.message || e));
     }
   });
 })();
