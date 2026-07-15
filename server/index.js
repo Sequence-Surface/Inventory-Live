@@ -39,18 +39,26 @@ if (fs.existsSync(clientDist)) {
 }
 
 async function connect() {
-  // Prefer an explicit MONGODB_URI. If it's unreachable, fall back to in-memory.
+  // If an explicit MONGODB_URI is set, we REQUIRE it: on failure we exit loudly rather than
+  // silently using an in-memory DB (which would keep the user's data out of Atlas). Set
+  // MONGODB_ALLOW_MEMORY_FALLBACK=1 to opt back into the old silent-fallback behavior.
   if (MONGODB_URI) {
     try {
       await connectDB(MONGODB_URI);
       return;
     } catch (err) {
-      console.warn(`[server] could not reach MONGODB_URI (${err.message}).`);
-      console.warn('[server] falling back to in-memory MongoDB.');
+      console.error(`[server] FAILED to connect to MONGODB_URI: ${err.message}`);
+      if (process.env.MONGODB_ALLOW_MEMORY_FALLBACK === '1') {
+        console.warn('[server] MONGODB_ALLOW_MEMORY_FALLBACK=1 → using TEMPORARY in-memory DB (data will NOT reach Atlas).');
+        await connectMemoryDB();
+        return;
+      }
+      console.error('[server] Refusing to start on a temporary in-memory DB (your data would not persist to Atlas).');
+      console.error('[server] Check: Atlas Network Access IP allowlist, credentials, and DNS. Then restart.');
+      throw err;
     }
-  } else {
-    console.log('[server] no MONGODB_URI set — starting in-memory MongoDB (zero-setup mode).');
   }
+  console.log('[server] no MONGODB_URI set — starting in-memory MongoDB (zero-setup mode).');
   await connectMemoryDB();
 }
 

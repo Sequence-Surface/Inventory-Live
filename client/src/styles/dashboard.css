@@ -186,6 +186,26 @@
   td.cat { color: var(--text-2); font-size: 11px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   tr:hover td { background: var(--panel-2); }
 
+  /* Loading skeleton — shown while the dataset loads from the backend */
+  #appSkeleton { position: fixed; inset: 0; z-index: 90000; background: var(--bg, #0a0a0e); overflow: hidden; padding: 28px clamp(16px, 4vw, 48px); }
+  #appSkeleton .sk { position: relative; overflow: hidden; background: var(--panel, #16161c); border: 1px solid var(--line-2, #24242c); border-radius: 8px; }
+  #appSkeleton .sk::after { content: ''; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent); animation: skshimmer 1.3s ease-in-out infinite; }
+  @keyframes skshimmer { 100% { transform: translateX(100%); } }
+  #appSkeleton .sk-title { width: 320px; max-width: 60%; height: 26px; }
+  #appSkeleton .sk-subtitle { width: 220px; max-width: 45%; height: 12px; margin-top: 12px; }
+  #appSkeleton .sk-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 26px 0; }
+  #appSkeleton .sk-kpi { height: 92px; }
+  #appSkeleton .sk-charts { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 16px; margin-bottom: 26px; }
+  #appSkeleton .sk-chart-lg, #appSkeleton .sk-chart-sm { height: 220px; }
+  #appSkeleton .sk-tablebar { width: 100%; height: 40px; margin-bottom: 12px; }
+  #appSkeleton .sk-table { display: flex; flex-direction: column; gap: 10px; }
+  #appSkeleton .sk-trow { width: 100%; height: 30px; }
+  #appSkeleton .sk-note { margin-top: 22px; text-align: center; font-family: var(--mono, monospace); font-size: 12px; color: var(--text-3, #6b6b78); letter-spacing: 0.04em; }
+  @media (max-width: 900px) {
+    #appSkeleton .sk-kpis { grid-template-columns: repeat(2, 1fr); }
+    #appSkeleton .sk-charts { grid-template-columns: 1fr; }
+  }
+
   /* Processing loader overlay */
   #processingOverlay { position: fixed; inset: 0; z-index: 100000; display: flex; align-items: center; justify-content: center; background: rgba(10,10,14,0.72); backdrop-filter: blur(2px); }
   #processingOverlay .proc-box { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 28px 40px; background: var(--panel); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
