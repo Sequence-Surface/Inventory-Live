@@ -4084,10 +4084,11 @@ document.getElementById('masterUpload').addEventListener('change', (e) => {
         alert('No valid parent products found after cleaning. Every row had a blank/0 or unmatched Parent Product.');
         return;
       }
-      // Persist the ProductId → parent-code index so the Purchase/Sales cleaners can resolve PIDs.
+      // Build the ProductId → parent-code index so the Purchase/Sales/Stock cleaners can resolve
+      // PIDs. It's persisted inside the cleaned dataset D (as D.__idIndex, set in the rebuild) — no
+      // separate blob — so it survives reloads and keeps Mongo holding only the cleaned dataset.
       Object.keys(productIdToParentCode).forEach(k => delete productIdToParentCode[k]);
       Object.assign(productIdToParentCode, idIndex);
-      saveProductIdIndex();
       renderMasterPreview(stats, map);
       // Enter real-data mode and BUILD the live dashboard from this master (+ any sales/purchase/
       // stock already uploaded). applyMasterOverride still records parentLaunchDates/productTypes.
@@ -5098,6 +5099,11 @@ function rebuildDashboardFromUploads() {
   // 6) Refresh every view in place
   realDataMode = true;
   D.__real = true;   // persisted flag → on reload we skip the demo dummy-vendor step & rehydrate
+  // Embed the PID→parent index IN the cleaned dataset so it persists to Mongo with D and survives
+  // reloads. It CANNOT be reconstructed from D (child ProductIds aren't stored on products), so it
+  // must ride along — otherwise Purchase/Sales/Stock uploads after a reload can't resolve PIDs.
+  // Store a shallow copy (not a live reference) so mutating one never silently changes the other.
+  D.__idIndex = Object.assign({}, productIdToParentCode);
   const _hw = document.getElementById('histWindowLabel');
   if (_hw) _hw.textContent = `${D.months[0]} → ${D.months[D.months.length - 1]}`;
   if (typeof precomputeDemandMeta === 'function') precomputeDemandMeta();
@@ -5245,12 +5251,36 @@ document.getElementById('histReset').addEventListener('click', () => {
 });
 
 // ===== Clear all data — wipe the catalog + all overrides to a blank dashboard =====
+// ===== Sync from MongoDB — re-pull the latest saved dataset and reload the dashboard =====
+(function setupSyncMongo() {
+  const btn = document.getElementById('syncMongoBtn');
+  if (!btn) return;
+  const status = document.getElementById('syncMongoStatus');
+  btn.addEventListener('click', async () => {
+    if (status) { status.style.color = 'var(--text-3)'; status.textContent = 'Syncing from MongoDB…'; }
+    showLoader('Syncing latest data from MongoDB…');
+    try {
+      // Verify the DB is reachable and has a dataset, then reload so the whole dashboard
+      // re-initializes from the freshly-fetched, cleaned data (rehydrating real-data mode + index).
+      const res = await fetch('/api/data', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      if (!data || !Array.isArray(data.products)) throw new Error('No dataset found in MongoDB');
+      if (status) { status.style.color = 'var(--green)'; status.textContent = `Fetched ${fmt(data.products.length)} products — reloading…`; }
+      setTimeout(() => location.reload(), 250);
+    } catch (e) {
+      hideLoader();
+      if (status) { status.style.color = 'var(--red)'; status.textContent = 'Sync failed: ' + (e.message || e); }
+    }
+  });
+})();
+
 (function setupClearAllData() {
   const btn = document.getElementById('clearAllDataBtn');
   if (!btn) return;
   const status = document.getElementById('clearAllDataStatus');
   btn.addEventListener('click', async () => {
-    if (!confirm('This permanently deletes the demo catalog AND all your uploaded data (master, stock, sales, purchases), leaving a completely blank dashboard. Continue?')) return;
+    if (!confirm('This permanently deletes all your uploaded data (master, stock, sales, purchases) from MongoDB, leaving a completely blank dashboard. Continue?')) return;
     if (!confirm('Are you absolutely sure? This cannot be undone.')) return;
     if (status) status.textContent = 'Clearing…';
     try {
@@ -5370,8 +5400,11 @@ function assignDummyVendorNames() {
 // the in-memory realData store so further uploads rebuild correctly.
 if (D && D.__real) {
   realDataMode = true;
+  // Restore the PID→parent index that was persisted inside the cleaned dataset (so uploads work).
+  if (D.__idIndex && typeof D.__idIndex === 'object') Object.assign(productIdToParentCode, D.__idIndex);
   rehydrateRealDataFromD();
-} else {
+} else if (!(D && D.__empty)) {
+  // Legacy demo dataset only — an EMPTY dataset must stay empty (no synthetic vendors).
   assignDummyVendorNames();
 }
 // Re-populate the category / vendor / folder autocomplete datalists now that D.vendors has been

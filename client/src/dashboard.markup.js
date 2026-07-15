@@ -482,8 +482,16 @@ export const DASHBOARD_HTML = `
     <span class="section-rule"></span>
   </div>
   <div class="panel reveal reveal-1">
+    <h3 class="panel-title">Sync from MongoDB</h3>
+    <p class="panel-sub">Re-pull the latest saved dataset from the database — useful if the data was updated from another device or session. Reloads the dashboard with the freshly-fetched, cleaned data.</p>
+    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+      <button class="upload-btn" id="syncMongoBtn" title="Fetch the latest dataset from MongoDB and reload">⟳ Sync from MongoDB</button>
+      <span id="syncMongoStatus" style="font-family:var(--mono); font-size:11px; color:var(--text-3);"></span>
+    </div>
+  </div>
+  <div class="panel reveal reveal-1">
     <h3 class="panel-title">Clear all data</h3>
-    <p class="panel-sub">Wipes the built-in demo catalog <strong>and</strong> every uploaded override (master, stock, sales, purchases) — the dashboard goes completely empty so you can build it up from your own uploads below. This cannot be undone.</p>
+    <p class="panel-sub">Wipes all your uploaded data (master, stock, sales, purchases) from MongoDB — the dashboard goes completely empty so you can rebuild it from your own uploads below. This cannot be undone.</p>
     <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
       <button class="reset-btn" id="clearAllDataBtn" style="display:inline-block; background:rgba(255,74,92,0.12); border-color:rgba(255,74,92,0.5); color:var(--red);">⨯ Clear all data (blank dashboard)</button>
       <span id="clearAllDataStatus" style="font-family:var(--mono); font-size:11px; color:var(--text-3);"></span>
