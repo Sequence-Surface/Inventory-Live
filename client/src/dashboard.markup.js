@@ -4,6 +4,9 @@
 /* eslint-disable */
 export const DASHBOARD_HTML = `
 
+<!-- Fixed top-right button: re-fetch the latest data from MongoDB and reload the dashboard -->
+<button id="syncMongoBtnTop" class="sync-top-btn" title="Fetch the latest data from MongoDB and reload">⟳ Sync from MongoDB</button>
+
 <!-- Processing loader overlay — shown while an uploaded file is being cleaned & the dashboard rebuilt -->
 <div id="processingOverlay" style="display:none;">
   <div class="proc-box">
@@ -480,14 +483,6 @@ export const DASHBOARD_HTML = `
     <span class="section-num">DATA /</span>
     <span class="section-title">Start <em>fresh</em></span>
     <span class="section-rule"></span>
-  </div>
-  <div class="panel reveal reveal-1">
-    <h3 class="panel-title">Sync from MongoDB</h3>
-    <p class="panel-sub">Re-pull the latest saved dataset from the database — useful if the data was updated from another device or session. Reloads the dashboard with the freshly-fetched, cleaned data.</p>
-    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
-      <button class="upload-btn" id="syncMongoBtn" title="Fetch the latest dataset from MongoDB and reload">⟳ Sync from MongoDB</button>
-      <span id="syncMongoStatus" style="font-family:var(--mono); font-size:11px; color:var(--text-3);"></span>
-    </div>
   </div>
   <div class="panel reveal reveal-1">
     <h3 class="panel-title">Clear all data</h3>
