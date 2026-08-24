@@ -11,23 +11,169 @@ const Chart = window.Chart;
 const XLSX = window.XLSX;
 
 
-// Persist the current in-memory dataset D (with all uploaded data applied) back
-// into MongoDB's main `datasets` document, so the database is the single source
-// of truth and uploads show up on every device — not just this browser.
-// Debounced so a burst of uploads only writes once.
-let _persistTimer = null;
-function persistDatasetToMongo() {
-  if (_persistTimer) clearTimeout(_persistTimer);
-  _persistTimer = setTimeout(() => {
-    try {
-      fetch('/api/data', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(D),
-      }).then(r => { if (!r.ok) console.warn('[persist] save failed HTTP', r.status); })
-        .catch(e => console.warn('[persist] save error', e));
-    } catch (e) { console.warn('[persist] save threw', e); }
-  }, 400);
+// ===== Server data layer =====
+// The collections in MongoDB are the single source of truth. Uploads POST parsed
+// rows to /api/uploads/* — the server merges them (upsert; nothing is ever lost)
+// and returns the freshly built dataset view, which adoptDataset() swaps in.
+// The old whole-blob PUT /api/data persist is retired (server returns 410).
+function persistDatasetToMongo() { /* retired — the server owns persistence now */ }
+
+async function postUpload(path, payload) {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  let body = null;
+  try { body = await res.json(); } catch (e) {}
+  if (!res.ok) throw new Error((body && body.error) || ('HTTP ' + res.status));
+  return body;
+}
+
+// Last month of the current window as 'yyyy-mm' (derived from D.months labels).
+function windowEndYm() {
+  const lbl = (D.months && D.months[D.months.length - 1]) || '';
+  const [mon, yy] = String(lbl).split('-');
+  const MONTHS3 = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+  const mm = MONTHS3.indexOf((mon || '').slice(0, 3).toLowerCase()) + 1;
+  if (!mm || !yy) return null;
+  return `20${String(yy).slice(-2)}-${String(mm).padStart(2, '0')}`;
+}
+
+// "Today" anchor for launch-age math: mid-month of the latest data month, so
+// ages stay consistent with the window (falls back to the real today).
+function dataAnchorDate() {
+  const ym = windowEndYm();
+  if (!ym) return new Date();
+  const [y, m] = ym.split('-').map(n => parseInt(n, 10));
+  return new Date(y, m - 1, 15);
+}
+
+// Swap in a freshly built dataset view from the server (in place — `D` is a
+// const referenced everywhere), refresh every dependent lookup, re-derive, and
+// re-render the whole dashboard.
+function adoptDataset(newD) {
+  if (!newD || !Array.isArray(newD.products)) return;
+  Object.keys(D).forEach(k => { delete D[k]; });
+  Object.assign(D, newD);
+  realDataMode = !!D.__real;
+  // PID → parent-code index (needed by the raw stock/history cleaners).
+  Object.keys(productIdToParentCode).forEach(k => delete productIdToParentCode[k]);
+  if (D.__idIndex) Object.assign(productIdToParentCode, D.__idIndex);
+  // Launch dates / product types: server master data fills the gaps; values the
+  // user already has locally (State-backed localStorage) win.
+  const meta = D.meta || {};
+  Object.keys(meta.launchDates || {}).forEach(k => { if (!parentLaunchDates[k]) parentLaunchDates[k] = meta.launchDates[k]; });
+  Object.keys(meta.productTypes || {}).forEach(k => { if (!parentProductTypes[k]) parentProductTypes[k] = meta.productTypes[k]; });
+  rebuildMasterOverrideFromD();
+  if (typeof refreshMonthIndex === 'function') refreshMonthIndex();
+  if (typeof populateRangeSelectors === 'function') populateRangeSelectors();
+  updateTopbarMeta();
+  deriveAndRender();
+}
+
+// Child-code list for getProductChildren(): rebuilt from the adopted D (child
+// launch dates ride along in D.meta.childLaunchDates when the master had them).
+function rebuildMasterOverrideFromD() {
+  if (!D.__real) return;
+  const childDates = (D.meta && D.meta.childLaunchDates) || {};
+  const map = {};
+  (D.products || []).forEach(p => {
+    const codeU = (p.n || '').toUpperCase().trim();
+    map[p.i] = {
+      parentCode: p.n,
+      vendorName: ((D.vendors || [])[p.v] || {}).name || '',
+      categoryName: (D.cats || [])[p.c] || '',
+      productType: parentProductTypes[codeU] || '',
+      parentLaunchDate: parentLaunchDates[codeU] || '',
+      stock: p.k || 0,
+      children: (p.ch || []).map(c => {
+        const code = String((Array.isArray(c) ? c[0] : c) || '');
+        return { code, launchDate: childDates[code.toUpperCase().trim()] || '' };
+      }),
+    };
+  });
+  masterOverride = map;
+}
+
+// Topbar / header labels that reflect the data state (window + last upload).
+function updateTopbarMeta() {
+  const meta = D.meta || {};
+  const hw = document.getElementById('histWindowLabel');
+  if (hw && D.months) hw.textContent = `${D.months[0]} → ${D.months[D.months.length - 1]}`;
+  const dt = document.getElementById('dataThroughLabel');
+  if (dt) {
+    if (meta.dataThrough) {
+      const [y, m] = meta.dataThrough.split('-').map(n => parseInt(n, 10));
+      const MN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      dt.textContent = `${MN[m - 1]} ${y}`;
+    } else dt.textContent = '—';
+  }
+  const lu = document.getElementById('lastUploadLabel');
+  if (lu) {
+    if (meta.lastUpload && meta.lastUpload.uploadedAt) {
+      const d = new Date(meta.lastUpload.uploadedAt);
+      lu.textContent = `${meta.lastUpload.type} · ${d.toLocaleDateString('en-IN')} ${d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
+    } else lu.textContent = 'no uploads yet';
+  }
+  const fs = document.getElementById('footerStats');
+  if (fs) {
+    const totalChildren = (D.products || []).reduce((s, p) => s + (p.ch ? p.ch.length : 0), 0);
+    fs.textContent = `${fmt((D.products || []).length)} parents · ${fmt(totalChildren)} child codes · ${fmt((D.folders || []).length)} folders · ${fmt((D.vendors || []).length)} vendors · 24-month window`;
+  }
+  renderUploadLog();
+}
+
+// The server-side upload audit trail, shown on the Data & Uploads page.
+function renderUploadLog() {
+  const body = document.getElementById('uploadLogBody');
+  if (!body) return;
+  fetch('/api/uploads?limit=50').then(r => r.json()).then(items => {
+    if (!Array.isArray(items) || !items.length) {
+      body.innerHTML = '<tr><td colspan="6" style="color:var(--text-3)">No uploads yet</td></tr>';
+      return;
+    }
+    const esc = (x) => String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    body.innerHTML = items.map(u => {
+      const d = new Date(u.uploadedAt);
+      const when = `${d.toLocaleDateString('en-IN')} ${d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
+      const c = u.counts || {};
+      const rowsN = c.merged != null ? c.merged : (c.parsed != null ? c.parsed : (c.products != null ? c.products : ''));
+      const months = (u.monthsCovered || []);
+      const monthsTxt = months.length > 6 ? `${months[0]} … ${months[months.length - 1]} (${months.length})` : months.join(', ');
+      const err = u.status === 'error' ? ' style="color:var(--red)"' : '';
+      return `<tr${err}><td style="white-space:nowrap">${when}</td><td><span class="pill">${esc(u.type)}</span></td><td>${esc(u.source)}</td><td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(u.fileName)}">${esc(u.fileName) || '—'}</td><td class="num">${fmt(rowsN)}</td><td style="font-family:var(--mono);font-size:10px;color:var(--text-3)">${monthsTxt || '—'}</td></tr>`;
+    }).join('');
+  }).catch(() => {});
+}
+
+// Re-derive per-product classification from the adopted view and re-render every
+// panel. (The server already derives these — re-running locally is deterministic
+// and also applies any user-edited launch dates layered on top.)
+function deriveAndRender() {
+  const endYm = windowEndYm();
+  if (D.__real && endYm) {
+    D.products.forEach(p => {
+      recomputeDerivedStock(p);
+      recomputeSalesDerived(p);
+      p.ms = monthsSinceLastSale(p.s);
+      p.pa = productAgeMonths(parentLaunchDates[(p.n || '').toUpperCase().trim()], endYm);
+      p.fa = p.pa;
+      p.t = turnoverRatio(p);
+      p.st = statusIndexFor(p);
+      p.mv = moverIndexFor(p);
+      p.d = p.ad; p.f = Math.round(p.m || 0); p.ps = p.st;
+    });
+    assignABC(D.products);
+    rebuildAggregates();
+  }
+  if (typeof precomputeDemandMeta === 'function') precomputeDemandMeta();
+  renderHeaderAndCharts();
+  if (typeof refreshFilterDatalists === 'function') refreshFilterDatalists();
+  if (typeof renderVendors === 'function') renderVendors();
+  if (typeof renderZoneBrowser === 'function') renderZoneBrowser();
+  if (typeof renderFolderView === 'function') renderFolderView();
+  rerender();
 }
 
 const fmt = (n) => n == null ? '—' : Number(n).toLocaleString('en-IN');
@@ -82,20 +228,8 @@ let masterOverride = null;
 // rebuild pipeline consumes; sales/purchase are kept as full month-keyed maps so the 24-month
 // window can shift to the latest data. Upsert semantics: re-uploading a month overwrites it.
 let realDataMode = false;
-const realData = {
-  masterMap: null,     // parentId -> { parentCode, vendorName, categoryName, productType, parentLaunchDate, children:[{code,launchDate}] }
-  salesByMonth: {},    // UPPER(parentCode) -> { 'yyyy-mm': qty }
-  purchByMonth: {},    // UPPER(parentCode) -> { 'yyyy-mm': qty }
-  stockByCode: {},     // UPPER(parentCode) -> { k, it, po }
-};
-// Merge a per-file month map into a running store, overwriting months present in the new file
-// (same month → replace) and keeping the rest (new month → merge).
-function mergeMonthMaps(target, incoming) {
-  Object.keys(incoming || {}).forEach(code => {
-    if (!target[code]) target[code] = {};
-    Object.assign(target[code], incoming[code]);
-  });
-}
+// (The old in-memory realData store + mergeMonthMaps are gone: month-keyed
+// history now lives in MongoDB collections and merging happens server-side.)
 // Folder → zone mapping. Each folder is either: in N specific zones (1..6), OPEN to all, or UNCLASSIFIED (no entry).
 //   folderZones['Coats']   = { zones: [1, 3], openToAll: false }
 //   folderZones['Trims']   = { zones: [],     openToAll: true  }
@@ -243,8 +377,8 @@ function monthsSinceLaunch(dateStr) {
     else return null;
   }
   if (isNaN(d.getTime())) return null;
-  // Anchor "today" to the report date used elsewhere in the dashboard (May 13, 2026)
-  const anchor = new Date(2026, 4, 13);
+  // Anchor "today" to the latest data month (kept consistent with the window)
+  const anchor = dataAnchorDate();
   let months = (anchor.getFullYear() - d.getFullYear()) * 12 + (anchor.getMonth() - d.getMonth());
   if (anchor.getDate() < d.getDate()) months -= 1;  // not yet a full month
   return Math.max(0, months);
@@ -276,8 +410,7 @@ function dummyChildLaunchDate(code) {
   const monthsBack = h % 36;
   const day = 1 + ((h >>> 7) % 28);
   // Anchor "today" to the data window so dates look consistent with the 24-month cells.
-  // The dataset's most recent month is Apr-26 → take anchor = 2026-05-13 (report date).
-  const anchor = new Date(2026, 4, 13);  // May = month index 4
+  const anchor = dataAnchorDate();
   const d = new Date(anchor);
   d.setDate(1);
   d.setMonth(d.getMonth() - monthsBack);
@@ -337,7 +470,9 @@ function saveEdits() {
 // ===== KPI cards + insights + charts =====
 // Wrapped in renderHeaderAndCharts() so a rebuild from uploaded data can refresh them in place
 // (they otherwise render only once at load and are NOT touched by rerender()).
-const tooltipStyle = () => ({ backgroundColor: '#1c1c22', titleColor: '#fff', bodyColor: '#a8a8b3', borderColor: '#34343e', borderWidth: 1, padding: 12, displayColors: true, titleFont: { family: 'JetBrains Mono', size: 11 }, bodyFont: { family: 'Inter', size: 12 } });
+// Read a CSS custom property so charts follow the active theme.
+function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+const tooltipStyle = () => ({ backgroundColor: cssVar('--panel-2') || '#1c1c22', titleColor: cssVar('--text') || '#fff', bodyColor: cssVar('--text-2') || '#a8a8b3', borderColor: cssVar('--line-2') || '#34343e', borderWidth: 1, padding: 12, displayColors: true, titleFont: { family: 'JetBrains Mono', size: 11 }, bodyFont: { family: 'Inter', size: 12 } });
 
 // Chart.js instances kept so we can destroy + recreate on rebuild (a new Chart on a canvas
 // already in use throws "Canvas is already in use").
@@ -385,53 +520,62 @@ function renderHeaderAndCharts() {
   // Destroy existing chart instances before recreating (canvas-reuse guard)
   ['agg', 'status', 'abc', 'mover'].forEach(id => { const c = _dashCharts[id]; if (c) { try { c.destroy(); } catch (e) {} } _dashCharts[id] = null; });
 
+  // All chart colors come from the active theme's CSS variables, so charts
+  // re-skin correctly when the theme toggles (renderHeaderAndCharts re-runs).
+  const cAccent = cssVar('--accent') || '#8b7cff';
+  const cAccent2 = cssVar('--accent-2') || '#ff7450';
+  const cGreen = cssVar('--green'), cOrange = cssVar('--orange'), cRed = cssVar('--red');
+  const cBlue = cssVar('--blue'), cPurple = cssVar('--purple');
+  const cGrid = cssVar('--line') || '#1c1c22', cTick = cssVar('--text-3') || '#6b6b78';
+  const cLegend = cssVar('--text-2') || '#a8a8b3', cMuted = cssVar('--line-2') || '#34343e';
+
   _dashCharts.agg = safeChart('aggChart', {
     data: {
       labels: D.months,
       datasets: [
-        { type: 'bar', label: 'Purchases', data: D.aggP, backgroundColor: 'rgba(255, 92, 58, 0.55)', borderColor: 'rgba(255, 92, 58, 0.85)', borderWidth: 1, order: 2 },
-        { type: 'line', label: 'Sales', data: D.aggS, borderColor: '#d4ff3a', backgroundColor: 'rgba(212,255,58,0.08)', borderWidth: 2.5, tension: 0.3, fill: true, pointRadius: 3, pointBackgroundColor: '#d4ff3a', pointBorderWidth: 0, order: 1 }
+        { type: 'bar', label: 'Purchases', data: D.aggP, backgroundColor: cAccent2 + '8C', borderColor: cAccent2, borderWidth: 1, borderRadius: 4, order: 2 },
+        { type: 'line', label: 'Sales', data: D.aggS, borderColor: cAccent, backgroundColor: cAccent + '14', borderWidth: 2.5, tension: 0.3, fill: true, pointRadius: 3, pointBackgroundColor: cAccent, pointBorderWidth: 0, order: 1 }
       ]
     },
     options: {
       responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
-      plugins: { legend: { labels: { color: '#a8a8b3', font: { family: 'JetBrains Mono', size: 10 }, boxWidth: 12 } }, tooltip: tooltipStyle() },
+      plugins: { legend: { labels: { color: cLegend, font: { family: 'JetBrains Mono', size: 10 }, boxWidth: 12 } }, tooltip: tooltipStyle() },
       scales: {
-        x: { grid: { color: '#1c1c22' }, ticks: { color: '#6b6b78', font: { family: 'JetBrains Mono', size: 10 } } },
-        y: { grid: { color: '#1c1c22' }, ticks: { color: '#6b6b78', font: { family: 'JetBrains Mono', size: 10 }, callback: v => (v/1000).toFixed(0)+'k' }, beginAtZero: true }
+        x: { grid: { color: cGrid }, ticks: { color: cTick, font: { family: 'JetBrains Mono', size: 10 } } },
+        y: { grid: { color: cGrid }, ticks: { color: cTick, font: { family: 'JetBrains Mono', size: 10 }, callback: v => (v/1000).toFixed(0)+'k' }, beginAtZero: true }
       }
     }
   });
 
   const statusOrder = STATUS.filter(s => s !== 'Inactive');
-  const statusColors = { 'Critical':'#ff4a5c','Low Stock':'#ffa83a','Healthy':'#3affb6','Adequate':'#5cabff','Overstocked':'#b88aff','Dead Stock':'#6b6b78','Inactive':'#34343e' };
+  const statusColors = { 'Critical': cRed, 'Low Stock': cOrange, 'Healthy': cGreen, 'Adequate': cBlue, 'Overstocked': cPurple, 'Dead Stock': cTick, 'Inactive': cMuted };
   const statusCount = {};
   D.products.forEach(p => { const s = STATUS[p.st]; statusCount[s] = (statusCount[s] || 0) + 1; });
   _dashCharts.status = safeChart('statusChart', {
     type: 'doughnut',
     data: { labels: statusOrder, datasets: [{ data: statusOrder.map(s => statusCount[s] || 0), backgroundColor: statusOrder.map(s => statusColors[s]), borderWidth: 0, hoverOffset: 8 }] },
     options: { responsive: true, maintainAspectRatio: false, cutout: '62%',
-      plugins: { legend: { position: 'bottom', labels: { color: '#a8a8b3', font: { family: 'JetBrains Mono', size: 9 }, boxWidth: 10, padding: 10 } },
+      plugins: { legend: { position: 'bottom', labels: { color: cLegend, font: { family: 'JetBrains Mono', size: 9 }, boxWidth: 10, padding: 10 } },
         tooltip: { ...tooltipStyle(), callbacks: { label: c => c.label + ': ' + fmt(c.raw) } } } }
   });
 
   _dashCharts.abc = safeChart('abcChart', {
     type: 'doughnut',
-    data: { labels: ['Class A', 'Class B', 'Class C'], datasets: [{ data: [k.classACount, k.classBCount, k.classCCount], backgroundColor: ['#d4ff3a', 'rgba(212,255,58,0.45)', '#34343e'], borderWidth: 0, hoverOffset: 8 }] },
+    data: { labels: ['Class A', 'Class B', 'Class C'], datasets: [{ data: [k.classACount, k.classBCount, k.classCCount], backgroundColor: [cAccent, cAccent + '73', cMuted], borderWidth: 0, hoverOffset: 8 }] },
     options: { responsive: true, maintainAspectRatio: false, cutout: '62%',
-      plugins: { legend: { position: 'bottom', labels: { color: '#a8a8b3', font: { family: 'JetBrains Mono', size: 9 }, boxWidth: 10, padding: 10 } },
+      plugins: { legend: { position: 'bottom', labels: { color: cLegend, font: { family: 'JetBrains Mono', size: 9 }, boxWidth: 10, padding: 10 } },
         tooltip: { ...tooltipStyle(), callbacks: { label: c => c.label + ': ' + fmt(c.raw) + ' SKUs' } } } }
   });
 
   const moverOrder = ['Active', 'Sluggish (3-6m)', 'Slow (6-12m)', 'Non-Moving (12m+)', 'No Stock'];
   const moverCount = {};
   D.products.forEach(p => { const m = MOVERS[p.mv]; moverCount[m] = (moverCount[m] || 0) + 1; });
-  const moverColors = { 'Active':'#3affb6', 'Sluggish (3-6m)':'#ffa83a', 'Slow (6-12m)':'#ff5c3a', 'Non-Moving (12m+)':'#ff4a5c', 'No Stock':'#6b6b78' };
+  const moverColors = { 'Active': cGreen, 'Sluggish (3-6m)': cOrange, 'Slow (6-12m)': cAccent2, 'Non-Moving (12m+)': cRed, 'No Stock': cTick };
   _dashCharts.mover = safeChart('moverChart', {
     type: 'doughnut',
     data: { labels: moverOrder, datasets: [{ data: moverOrder.map(m => moverCount[m] || 0), backgroundColor: moverOrder.map(m => moverColors[m]), borderWidth: 0, hoverOffset: 8 }] },
     options: { responsive: true, maintainAspectRatio: false, cutout: '62%',
-      plugins: { legend: { position: 'bottom', labels: { color: '#a8a8b3', font: { family: 'JetBrains Mono', size: 9 }, boxWidth: 10, padding: 10 } },
+      plugins: { legend: { position: 'bottom', labels: { color: cLegend, font: { family: 'JetBrains Mono', size: 9 }, boxWidth: 10, padding: 10 } },
         tooltip: { ...tooltipStyle(), callbacks: { label: c => c.label + ': ' + fmt(c.raw) + ' SKUs' } } } }
   });
 }
@@ -700,6 +844,184 @@ _wireMultiInput('searchInput', addSearchChip);
 _wireMultiInput('catFilter',   addCatChip);
 _wireMultiInput('vendorFilter', addVendorChip);
 _wireMultiInput('folderFilter', addFolderChip);
+
+// ===== Searchable multi-select dropdowns (combobox) =====
+// Wraps each filter input with a proper dropdown: click/type → filtered option
+// list with checkmarks; click or Enter toggles; multi-select stays open;
+// Esc / outside-click closes. Free text still works (Enter with no highlight
+// falls through to the chip-commit wiring above).
+function setupComboDropdown(inputId, cfg) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  const group = input.closest('.filter-group') || input.parentElement;
+  group.style.position = 'relative';
+  const panel = document.createElement('div');
+  panel.className = 'combo-panel';
+  panel.setAttribute('role', 'listbox');
+  group.appendChild(panel);
+  let open = false, hi = -1, shown = [];
+
+  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+  function renderList() {
+    const q = input.value.trim().toLowerCase();
+    shown = cfg.getOptions(q).slice(0, 200);
+    if (!shown.length) {
+      panel.innerHTML = `<div class="combo-empty">${q ? 'No matches — press Enter to add as free text' : 'Nothing to select yet'}</div>`;
+      hi = -1;
+      return;
+    }
+    const selCount = cfg.selectedCount ? cfg.selectedCount() : 0;
+    const head = selCount
+      ? `<div class="combo-head"><span>${fmt(selCount)} selected</span><button type="button" class="combo-clear" data-combo-clear>Clear all</button></div>`
+      : '';
+    panel.innerHTML = head + shown.map((o, i) => `
+      <div class="combo-opt${o.selected ? ' selected' : ''}${i === hi ? ' hi' : ''}" data-combo-i="${i}" role="option" aria-selected="${o.selected}">
+        <span class="combo-check">${o.selected ? '✓' : ''}</span>
+        <span class="combo-lbl" title="${esc(o.label)}">${esc(o.label)}</span>
+        ${o.sub ? `<span class="combo-sub">${esc(o.sub)}</span>` : ''}
+      </div>`).join('');
+    panel.querySelectorAll('[data-combo-i]').forEach(el => {
+      el.addEventListener('mousedown', (e) => {      // mousedown: fires before input blur
+        e.preventDefault();
+        toggleAt(parseInt(el.dataset.comboI, 10));
+      });
+    });
+    const clr = panel.querySelector('[data-combo-clear]');
+    if (clr) clr.addEventListener('mousedown', (e) => { e.preventDefault(); cfg.clearAll(); renderList(); });
+  }
+  function toggleAt(i) {
+    if (i < 0 || i >= shown.length) return;
+    cfg.toggle(shown[i]);
+    hi = i;
+    renderList();
+  }
+  function show() { if (open) return; open = true; panel.classList.add('open'); hi = -1; renderList(); }
+  function hide() { if (!open) return; open = false; hi = -1; panel.classList.remove('open'); }
+
+  input.addEventListener('focus', show);
+  input.addEventListener('input', () => { if (!open) show(); else renderList(); });
+  input.addEventListener('keydown', (e) => {
+    if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { show(); e.preventDefault(); return; }
+    if (!open) return;
+    if (e.key === 'ArrowDown') { hi = Math.min(shown.length - 1, hi + 1); renderList(); scrollHi(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { hi = Math.max(0, hi - 1); renderList(); scrollHi(); e.preventDefault(); }
+    else if (e.key === 'Enter' && hi >= 0) { toggleAt(hi); input.value = ''; e.preventDefault(); e.stopImmediatePropagation(); }
+    else if (e.key === 'Escape') { hide(); e.stopImmediatePropagation(); }
+  }, true);
+  function scrollHi() {
+    const el = panel.querySelector('.combo-opt.hi');
+    if (el) el.scrollIntoView({ block: 'nearest' });
+  }
+  document.addEventListener('mousedown', (e) => {
+    // Ignore targets detached by the list re-render inside this same event
+    // (clicking an option replaces the list DOM before the event bubbles here).
+    if (!document.contains(e.target)) return;
+    if (!group.contains(e.target)) hide();
+  });
+  // Keep the list fresh after outside changes (chip removal, adoptDataset)
+  input.addEventListener('click', () => { if (open) renderList(); else show(); });
+}
+
+function _comboRerender() { currentPage = 0; reorderPage = 0; rerender(); }
+
+// "Clear all filters" in the toolbar header — resets every filter at once.
+(function setupFilterClearAll() {
+  const btn = document.getElementById('filterClearAll');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    selFilters.search.clear(); renderSearchChips();
+    selFilters.cat.clear(); renderCatChips();
+    selFilters.vendor.clear(); renderVendorChips();
+    selFilters.folder.clear(); renderFolderChips();
+    selFilters.abc.clear();
+    selFilters.status.clear();
+    selFilters.virtualStatus.clear();
+    document.querySelectorAll('#abcToggles .ms-toggle, #statusToggles .ms-toggle').forEach(b => b.classList.remove('active'));
+    ['searchCount', 'catCount', 'vendorCount', 'folderCount', 'abcCount', 'statusCount'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = '';
+    });
+    const sd = document.getElementById('statusDropBtn');
+    if (sd) sd.textContent = 'All statuses';
+    ['searchInput', 'catFilter', 'vendorFilter', 'folderFilter'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+    _comboRerender();
+  });
+})();
+
+setupComboDropdown('searchInput', {
+  getOptions(q) {
+    const sel = selFilters.search;
+    let list = D.products;
+    if (q) list = list.filter(p => (p.n || '').toLowerCase().includes(q));
+    return list.slice(0, 500).map(p => ({
+      key: (p.n || '').toLowerCase(),
+      label: p.n,
+      sub: D.cats[p.c] || '',
+      selected: sel.has((p.n || '').toLowerCase()),
+    }));
+  },
+  toggle(o) {
+    if (selFilters.search.has(o.key)) selFilters.search.delete(o.key);
+    else selFilters.search.add(o.key);
+    renderSearchChips();
+    document.getElementById('searchCount').textContent = selFilters.search.size ? `(${selFilters.search.size})` : '';
+    _comboRerender();
+  },
+  selectedCount: () => selFilters.search.size,
+  clearAll() { selFilters.search.clear(); renderSearchChips(); document.getElementById('searchCount').textContent = ''; _comboRerender(); },
+});
+
+setupComboDropdown('catFilter', {
+  getOptions(q) {
+    return (D.cats || []).map((c, idx) => ({ idx, label: c }))
+      .filter(o => o.label && (!q || o.label.toLowerCase().includes(q)))
+      .map(o => ({ ...o, selected: selFilters.cat.has(o.idx) }));
+  },
+  toggle(o) {
+    if (selFilters.cat.has(o.idx)) selFilters.cat.delete(o.idx); else selFilters.cat.add(o.idx);
+    renderCatChips();
+    document.getElementById('catCount').textContent = selFilters.cat.size ? `(${selFilters.cat.size})` : '';
+    _comboRerender();
+  },
+  selectedCount: () => selFilters.cat.size,
+  clearAll() { selFilters.cat.clear(); renderCatChips(); document.getElementById('catCount').textContent = ''; _comboRerender(); },
+});
+
+setupComboDropdown('vendorFilter', {
+  getOptions(q) {
+    return (D.vendors || []).map((v, idx) => ({ idx, label: v.name || v.code, sub: v.code }))
+      .filter(o => !q || o.label.toLowerCase().includes(q) || String(o.sub).toLowerCase().includes(q))
+      .map(o => ({ ...o, selected: selFilters.vendor.has(o.idx) }));
+  },
+  toggle(o) {
+    if (selFilters.vendor.has(o.idx)) selFilters.vendor.delete(o.idx); else selFilters.vendor.add(o.idx);
+    renderVendorChips();
+    document.getElementById('vendorCount').textContent = selFilters.vendor.size ? `(${selFilters.vendor.size})` : '';
+    _comboRerender();
+  },
+  selectedCount: () => selFilters.vendor.size,
+  clearAll() { selFilters.vendor.clear(); renderVendorChips(); document.getElementById('vendorCount').textContent = ''; _comboRerender(); },
+});
+
+setupComboDropdown('folderFilter', {
+  getOptions(q) {
+    return (D.folders || []).map((f, idx) => ({ idx, label: f }))
+      .filter(o => o.label && (!q || o.label.toLowerCase().includes(q)))
+      .map(o => ({ ...o, selected: selFilters.folder.has(o.idx) }));
+  },
+  toggle(o) {
+    if (selFilters.folder.has(o.idx)) selFilters.folder.delete(o.idx); else selFilters.folder.add(o.idx);
+    renderFolderChips();
+    document.getElementById('folderCount').textContent = selFilters.folder.size ? `(${selFilters.folder.size})` : '';
+    _comboRerender();
+  },
+  selectedCount: () => selFilters.folder.size,
+  clearAll() { selFilters.folder.clear(); renderFolderChips(); document.getElementById('folderCount').textContent = ''; _comboRerender(); },
+});
 
 // Backwards-compat alias used by the vendor table click-through
 window.filterByVendor = (code) => {
@@ -1691,35 +2013,59 @@ function getRange() {
 
 const startSel = document.getElementById('customStart');
 const endSel = document.getElementById('customEnd');
-D.months.forEach((m, i) => {
-  const o1 = document.createElement('option'); o1.value = i; o1.textContent = m; startSel.appendChild(o1);
-  const o2 = document.createElement('option'); o2.value = i; o2.textContent = m; endSel.appendChild(o2);
-});
+// (Re)populate the custom-range month dropdowns from the CURRENT window labels.
+// Re-run after every adoptDataset so a shifted window never shows stale months.
+function populateRangeSelectors() {
+  const prevStart = startSel.value, prevEnd = endSel.value;
+  startSel.innerHTML = ''; endSel.innerHTML = '';
+  D.months.forEach((m, i) => {
+    const o1 = document.createElement('option'); o1.value = i; o1.textContent = m; startSel.appendChild(o1);
+    const o2 = document.createElement('option'); o2.value = i; o2.textContent = m; endSel.appendChild(o2);
+  });
+  startSel.value = prevStart !== '' && +prevStart < 24 ? prevStart : '0';
+  endSel.value = prevEnd !== '' && +prevEnd < 24 ? prevEnd : '23';
+}
+populateRangeSelectors();
 endSel.value = '23';
 
-document.querySelectorAll('#periodGroup .btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('#periodGroup .btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    const p = btn.dataset.period;
-    document.getElementById('customRange').classList.toggle('show', p === 'custom');
-    currentPeriod = p === 'custom' ? 'custom' : parseInt(p);
-    currentPage = 0;
-    reorderPage = 0;
-    rerender();
-  });
+const periodSelect = document.getElementById('periodSelect');
+periodSelect.addEventListener('change', () => {
+  const p = periodSelect.value;
+  document.getElementById('customRange').classList.toggle('show', p === 'custom');
+  currentPeriod = p === 'custom' ? 'custom' : parseInt(p);
+  currentPage = 0;
+  reorderPage = 0;
+  rerender();
 });
 startSel.addEventListener('change', () => { customStart = parseInt(startSel.value); rerender(); });
 endSel.addEventListener('change', () => { customEnd = parseInt(endSel.value); rerender(); });
 
-document.querySelectorAll('#viewGroup .btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('#viewGroup .btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    currentView = btn.dataset.view;
-    rerender();
-  });
+const viewSelect = document.getElementById('viewSelect');
+viewSelect.addEventListener('change', () => {
+  currentView = viewSelect.value;
+  rerender();
 });
+
+// Status dropdown: the toggle chips live inside a combo panel opened by a button.
+(function setupStatusDropdown() {
+  const btn = document.getElementById('statusDropBtn');
+  const panel = document.getElementById('statusPanel');
+  if (!btn || !panel) return;
+  const group = btn.closest('.filter-group');
+  group.style.position = 'relative';
+  btn.addEventListener('click', (e) => { e.preventDefault(); panel.classList.toggle('open'); });
+  document.addEventListener('mousedown', (e) => {
+    if (!document.contains(e.target)) return;
+    if (!group.contains(e.target)) panel.classList.remove('open');
+  });
+  // Keep the button label in sync with the selection count.
+  const sync = () => {
+    const n = selFilters.status.size + selFilters.virtualStatus.size;
+    btn.textContent = n ? `${n} status${n > 1 ? 'es' : ''} selected` : 'All statuses';
+  };
+  new MutationObserver(sync).observe(document.getElementById('statusCount'), { childList: true, characterData: true, subtree: true });
+  sync();
+})();
 
 // Planning-days info — single-line summary per option + [more] toggle (mirrors the Demand Basis / Scope explainers)
 let _planningInfoExpanded = false;
@@ -3038,7 +3384,8 @@ document.querySelectorAll('.tabs .tab').forEach(tab => {
     // First entry to Reorder Now: snap period to 6M for compact view
     if (currentTab === 'reorder' && currentPeriod === 24) {
       currentPeriod = 6;
-      document.querySelectorAll('#periodGroup .btn').forEach(b => b.classList.toggle('active', b.dataset.period === '6'));
+      const ps = document.getElementById('periodSelect');
+      if (ps) ps.value = '6';
       reorderPage = 0;
       rerender();
     }
@@ -4009,6 +4356,7 @@ function transformProductMasterRaw(objects) {
       folder: '',
       variant: 'Standard',
       launchDate: str(r[kDate]),
+      productId: id,   // persisted server-side so PID resolution survives reloads
     });
     // Map this row's own ProductId → its parent's Product Name (used by Purchase/Sales/Stock cleaners).
     if (parent.parentCode) idIndex[id] = parent.parentCode;
@@ -4017,6 +4365,30 @@ function transformProductMasterRaw(objects) {
 
   return { map, idIndex, stats: { parents: Object.keys(map).length, children, deleted } };
 }
+// Convert a cleaned master map (parentId → entry) to the row payload the
+// server merge endpoint expects.
+function masterMapToRows(map) {
+  return Object.keys(map).map(pid => {
+    const e = map[pid];
+    return {
+      parentId: parseInt(pid, 10),
+      parentCode: e.parentCode || '',
+      vendorName: e.vendorName || '',
+      categoryName: e.categoryName || '',
+      productType: e.productType || '',
+      launchDate: e.parentLaunchDate || '',
+      stock: e.stock || 0,
+      children: (e.children || []).map(ci => ({
+        code: ci.code || '',
+        productId: ci.productId != null ? ci.productId : null,
+        launchDate: ci.launchDate || '',
+        folder: ci.folder || '',
+        variant: ci.variant || 'Standard',
+      })),
+    };
+  }).filter(r => r.parentCode);
+}
+
 // Build a downloadable cleaned file in the dashboard's clean schema (+ product_type).
 function downloadCleanedMaster(map) {
   const headers = ['parent_id', 'parent_code', 'parent_launch_date', 'vendor_name', 'category', 'product_type', 'child_code', 'child_launch_date'];
@@ -4083,23 +4455,29 @@ document.getElementById('masterUpload').addEventListener('change', (e) => {
         alert('No valid parent products found after cleaning. Every row had a blank/0 or unmatched Parent Product.');
         return;
       }
-      // Build the ProductId → parent-code index so the Purchase/Sales/Stock cleaners can resolve
-      // PIDs. It's persisted inside the cleaned dataset D (as D.__idIndex, set in the rebuild) — no
-      // separate blob — so it survives reloads and keeps Mongo holding only the cleaned dataset.
+      // Immediate local PID index so a same-session Sales/Stock upload can resolve
+      // PIDs even before the server round-trip completes.
       Object.keys(productIdToParentCode).forEach(k => delete productIdToParentCode[k]);
       Object.assign(productIdToParentCode, idIndex);
       renderMasterPreview(stats, map);
-      // Enter real-data mode and BUILD the live dashboard from this master (+ any sales/purchase/
-      // stock already uploaded). applyMasterOverride still records parentLaunchDates/productTypes.
       realDataMode = true;
-      realData.masterMap = map;
       applyMasterOverride(map, file.name, {});
-      rebuildDashboardFromUploads();
-      document.getElementById('uploadStatus').innerHTML =
-        `<strong>Dashboard built from your data</strong> — <strong style="color:var(--accent)">${fmt(stats.parents)}</strong> products · <strong style="color:var(--accent)">${fmt(stats.children)}</strong> child codes. Upload Sales / Purchases / Stock to fill it in.`;
-      document.getElementById('uploadStatus').classList.add('loaded');
-      document.getElementById('masterReset').style.display = '';
-      return;
+      // Persist to the server (upsert by parent code; missing products are
+      // delisted, never deleted) and adopt the freshly built dataset it returns.
+      return postUpload('/api/uploads/master', {
+        fileName: file.name, source: 'file', rows: masterMapToRows(map),
+      }).then(res => {
+        adoptDataset(res.data);
+        const c = res.counts || {};
+        document.getElementById('uploadStatus').innerHTML =
+          `<strong>Dashboard built from your data</strong> — <strong style="color:var(--accent)">${fmt(stats.parents)}</strong> products · <strong style="color:var(--accent)">${fmt(stats.children)}</strong> child codes` +
+          (c.delisted ? ` · <span style="color:var(--text-3)">${fmt(c.delisted)} product(s) no longer in the master were delisted (history kept)</span>` : '') +
+          `. Upload Sales / Purchases / Stock to fill it in.`;
+        document.getElementById('uploadStatus').classList.add('loaded');
+        document.getElementById('masterReset').style.display = '';
+      }).catch(err => {
+        alert('Could not save the master to the database: ' + (err.message || err));
+      });
     }
     // Clean-schema path (unchanged) — hide any stale raw preview first.
     const pv = document.getElementById('masterPreview');
@@ -4110,7 +4488,11 @@ document.getElementById('masterUpload').addEventListener('change', (e) => {
       return;
     }
     applyMasterOverride(result.map, file.name, result.zonesByFolder);
-    persistDatasetToMongo();
+    // Persist the clean-schema master to the server too (same merge endpoint).
+    return postUpload('/api/uploads/master', {
+      fileName: file.name, source: 'file', rows: masterMapToRows(result.map),
+    }).then(res => adoptDataset(res.data))
+      .catch(err => alert('Could not save the master to the database: ' + (err.message || err)));
   }).catch(err => alert('Error: ' + (err.message || err)))
   );
   e.target.value = '';
@@ -4389,50 +4771,41 @@ function handleStockFile(file) {
       }
       const { stockByCode, stats, aggregates, sampleTx } = transformStockRaw(objects);
       if (!stats.parents) { setStockStatus('<span style="color:var(--red)">No stock rows resolved to a parent</span>', 'err'); return; }
-      // Upsert into realData (set on-hand k; keep any it/po) and rebuild the live dashboard.
-      Object.keys(stockByCode).forEach(code => {
-        realData.stockByCode[code] = Object.assign({}, realData.stockByCode[code], { k: stockByCode[code].k });
-      });
       renderStockPreview(stats, aggregates, sampleTx, stockByCode);
-      if (realDataMode) {
-        rebuildDashboardFromUploads();
-        setStockStatus(`<strong>Stock cleaned &amp; dashboard rebuilt</strong> from <strong style="color:var(--accent)">${file.name}</strong> — <strong>${fmt(stats.parents)}</strong> parents · <strong>${fmt(stats.totalStock)}</strong> on-hand`, 'ok');
-      } else {
-        setStockStatus(`<strong>Stock cleaned</strong> — upload &amp; build the Master first to see it on the dashboard`, 'ok');
-      }
-      document.getElementById('stockUploadDetail').innerHTML = stats.droppedUnresolved > 0 ? `${fmt(stats.droppedUnresolved)} row(s) with unresolved ProductID` : '';
-      document.getElementById('stockReset').style.display = '';
-      return;
+      // Server merge: appends a timestamped snapshot + updates current stock.
+      const rows = Object.keys(stockByCode).map(code => ({ parentCode: code, k: stockByCode[code].k }));
+      return postUpload('/api/uploads/stock', { fileName: file.name, source: 'file', rows }).then(res => {
+        adoptDataset(res.data);
+        setStockStatus(`<strong>Stock cleaned &amp; saved</strong> from <strong style="color:var(--accent)">${file.name}</strong> — <strong>${fmt(stats.parents)}</strong> parents · <strong>${fmt(stats.totalStock)}</strong> on-hand`, 'ok');
+        document.getElementById('stockUploadDetail').innerHTML = stats.droppedUnresolved > 0 ? `${fmt(stats.droppedUnresolved)} row(s) with unresolved ProductID` : '';
+        document.getElementById('stockReset').style.display = '';
+      }).catch(err => setStockStatus('Error saving stock: ' + (err.message || err), 'err'));
     }
     const pv = document.getElementById('stockPreview');
     if (pv) { pv.style.display = 'none'; pv.innerHTML = ''; }
     const text = csvText;
     const parsed = parseStockCSV(text);
-    stockOverride = { byCode: parsed.byCode, count: parsed.count, uploadedAt: new Date().toISOString(), fileName: file.name };
-    // Real-data mode: fold stock into realData (upsert by parent code) and rebuild the dashboard.
-    if (realDataMode) {
-      Object.keys(parsed.byCode).forEach(code => {
-        const src = parsed.byCode[code];
-        realData.stockByCode[code] = Object.assign({}, realData.stockByCode[code], {
-          k: src.k, it: src.it, po: src.po,
-        });
-      });
-      rebuildDashboardFromUploads();
-      setStockStatus(`<strong>Stock loaded &amp; dashboard rebuilt</strong> from <strong style="color:var(--accent)">${file.name}</strong> — <strong>${fmt(parsed.count)}</strong> rows`, 'ok');
-      document.getElementById('stockUploadDetail').innerHTML = parsed.skipped > 0 ? `${fmt(parsed.skipped)} row(s) skipped (blank or no values)` : '';
+    // Server merge (a null field means "keep the product's existing value").
+    const rows = Object.keys(parsed.byCode).map(code => {
+      const src = parsed.byCode[code];
+      return {
+        parentCode: code,
+        k: src.k != null ? src.k : null,
+        it: src.it != null ? src.it : null,
+        po: src.po != null ? src.po : null,
+      };
+    });
+    if (!rows.length) { setStockStatus('<span style="color:var(--red)">No usable stock rows in this file</span>', 'err'); return; }
+    return postUpload('/api/uploads/stock', { fileName: file.name, source: 'file', rows }).then(res => {
+      adoptDataset(res.data);
+      const c = res.counts || {};
+      setStockStatus(`<strong>Stock loaded &amp; saved</strong> from <strong style="color:var(--accent)">${file.name}</strong> — <strong>${fmt(parsed.count)}</strong> rows · <strong style="color:var(--green)">${fmt(c.matched)}</strong> matched to products`, 'ok');
+      const notes = [];
+      if (c.unmatched > 0) notes.push(`${fmt(c.unmatched)} row(s) had no matching product`);
+      if (parsed.skipped > 0) notes.push(`${fmt(parsed.skipped)} row(s) skipped (blank or no values)`);
+      document.getElementById('stockUploadDetail').innerHTML = notes.join(' · ');
       document.getElementById('stockReset').style.display = '';
-      return;
-    }
-    const { matched, unmatched, discToggled } = applyStockOverride(stockOverride);
-    saveStockOverride();
-    setStockStatus(`<strong>Stock data loaded</strong> from <strong style="color:var(--accent)">${file.name}</strong> — <strong>${fmt(parsed.count)}</strong> rows parsed, <strong style="color:var(--green)">${fmt(matched)}</strong> matched to products`, 'ok');
-    const notes = [`${fmt(unmatched)} products kept their original stock (no matching parent_code in file)`];
-    if (discToggled > 0) notes.push(`<strong style="color:var(--text-2)">${fmt(discToggled)}</strong> discontinued flag(s) toggled`);
-    if (parsed.skipped > 0) notes.push(`${fmt(parsed.skipped)} row(s) skipped (blank or no values)`);
-    document.getElementById('stockUploadDetail').innerHTML = notes.join(' · ');
-    document.getElementById('stockReset').style.display = '';
-    rerender();
-    persistDatasetToMongo();
+    }).catch(err => setStockStatus('Error saving stock: ' + (err.message || err), 'err'));
   }).catch(err => {
     setStockStatus('Error: ' + (err.message || 'failed to parse file'), 'err');
     document.getElementById('stockUploadDetail').textContent = '';
@@ -4466,17 +4839,10 @@ document.getElementById('stockReset').addEventListener('click', () => {
   });
 })();
 
-// Restore previous stock override from localStorage
-try {
-  const savedStock = localStorage.getItem(STOCK_OVERRIDE_KEY);
-  if (savedStock) {
-    stockOverride = JSON.parse(savedStock);
-    const { matched, unmatched } = applyStockOverride(stockOverride);
-    setStockStatus(`<strong>Stock data loaded</strong> from previous session (<strong style="color:var(--accent)">${stockOverride.fileName || 'CSV'}</strong>) — <strong>${fmt(stockOverride.count)}</strong> rows, <strong style="color:var(--green)">${fmt(matched)}</strong> matched`, 'ok');
-    document.getElementById('stockUploadDetail').textContent = `${fmt(unmatched)} products kept their original stock (no match in CSV)`;
-    document.getElementById('stockReset').style.display = '';
-  }
-} catch (e) {}
+// (The old restore-from-localStorage stock replay is gone: stock lives in the
+// database now and arrives already applied inside the dataset view. Replaying a
+// stale override on top of it grafted old values into the wrong state.)
+try { localStorage.removeItem(STOCK_OVERRIDE_KEY); } catch (e) {}
 
 // ===== Sales & Purchase history upload (parent_code + month → p.s / p.p) =====
 const HIST_OVERRIDE_KEY = 'inventoryHistoryOverride';
@@ -4536,7 +4902,36 @@ function buildMonthIndex() {
   });
   return map;
 }
-const _monthIdxMap = buildMonthIndex();
+let _monthIdxMap = buildMonthIndex();
+// Must be re-run whenever D.months changes (the window shifts after an upload) —
+// the old code built this once at load and went stale.
+function refreshMonthIndex() { _monthIdxMap = buildMonthIndex(); }
+
+// Parse ANY month label directly to 'yyyy-mm', independent of the current
+// window — so months outside today's 24-month view are stored (in the DB),
+// never dropped. Accepts "May-24", "May 2026", "2026-05", "05/2026", "04-25",
+// "13-May-26" (leading day stripped), full month names, etc.
+function parseMonthLabelToYm(raw) {
+  if (!raw) return null;
+  let s = String(raw).trim().toLowerCase().replace(/[\.,]/g, '').replace(/\s+/g, ' ');
+  if (!s) return null;
+  s = s.replace(/^\d{1,2}[\s\-\/]+(?=[a-z])/, '');   // "13-may-26" → "may-26"
+  const NAMES = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12 };
+  const yr4 = (y) => { y = String(y); return y.length === 2 ? '20' + y : y; };
+  // "may-24" / "may 2026" / "january-25"
+  let m = s.match(/^([a-z]{3,9})[\s\-\/]+(\d{2}|\d{4})$/);
+  if (m) {
+    const mm = NAMES[m[1].slice(0, 3)];
+    if (mm) return `${yr4(m[2])}-${String(mm).padStart(2, '0')}`;
+  }
+  // "2026-05" / "2026/5"
+  m = s.match(/^(\d{4})[\s\-\/](\d{1,2})$/);
+  if (m) { const mm = +m[2]; if (mm >= 1 && mm <= 12) return `${m[1]}-${String(mm).padStart(2, '0')}`; }
+  // "05/2026" / "5-2026" / "04-25"
+  m = s.match(/^(\d{1,2})[\s\-\/](\d{2}|\d{4})$/);
+  if (m) { const mm = +m[1]; if (mm >= 1 && mm <= 12) return `${yr4(m[2])}-${String(mm).padStart(2, '0')}`; }
+  return null;
+}
 function lookupMonthIdx(raw) {
   if (!raw) return -1;
   const k = String(raw).trim().toLowerCase().replace(/\s+/g, ' ');
@@ -4639,6 +5034,9 @@ function parseHistoryCSV(text, valueType) {
   };
 
   const byCode = {};
+  // Real-dated rows for the server: { s: [{parentCode, ym, qty}], p: [...] }.
+  // Sales and purchases are kept separate so each side merges independently.
+  const monthRows = { s: [], p: [] };
   let rows = 0, skippedMonth = 0, skippedBlank = 0;
 
   // ===== WIDE format detection =====
@@ -4649,11 +5047,14 @@ function parseHistoryCSV(text, valueType) {
       if (!h || i === iCode) return;
       // Skip obvious non-month columns
       if (/^(grand\s*total|total|sum|avg|average|notes?|comment)/i.test(h)) return;
-      // Try to parse this header as a month → idx. Accept variations like "April 2024", "13-May-26", etc.
-      // Strip a leading day number: "13-May-26" → "May-26"
+      // Parse the header to a real 'yyyy-mm' (window-independent) so months
+      // OUTSIDE the current 24-month view are kept and sent to the server,
+      // not silently dropped. monthIdx is only for the in-window preview.
+      const ym = parseMonthLabelToYm(h);
+      if (!ym) return;
       const cleaned = h.replace(/^\d+[\s\-\/]+/, '').trim();
       const midx = lookupMonthIdx(cleaned) !== -1 ? lookupMonthIdx(cleaned) : lookupMonthIdx(h);
-      if (midx !== -1) wideMonthCols.push({ headerIdx: i, monthIdx: midx, label: h });
+      wideMonthCols.push({ headerIdx: i, monthIdx: midx, ym, label: h });
     });
   }
   const isWide = (iMonth === -1) && wideMonthCols.length >= 2;
@@ -4677,13 +5078,14 @@ function parseHistoryCSV(text, valueType) {
       wideMonthCols.forEach(mc => {
         const v = num(cols[mc.headerIdx]);
         if (v == null) return;
-        byCode[code][fillKey][mc.monthIdx] = v;
+        if (mc.monthIdx !== -1) byCode[code][fillKey][mc.monthIdx] = v;
+        monthRows[fillKey === 'p' ? 'p' : 's'].push({ parentCode: code, ym: mc.ym, qty: v });
         rowAdded = true;
       });
       if (rowAdded) rows++;
     }
     skippedMonth = 0;  // wide layout doesn't have per-row month skip semantics
-    return { byCode, count: rows, skippedMonth, skippedBlank, parentCount: Object.keys(byCode).length, layout: 'wide' };
+    return { byCode, monthRows, count: rows, skippedMonth, skippedBlank, parentCount: Object.keys(byCode).length, layout: 'wide' };
   }
 
   // ===== LONG format =====
@@ -4694,14 +5096,23 @@ function parseHistoryCSV(text, valueType) {
     const code = (cols[iCode] || '').toUpperCase().trim();
     if (!code) { skippedBlank++; continue; }
     const monRaw = (cols[iMonth] || '').trim();
+    // Real 'yyyy-mm' first (window-independent → out-of-window months are kept);
+    // the slot index is only used for the in-window preview arrays.
+    const ym = parseMonthLabelToYm(monRaw);
+    if (!ym) { skippedMonth++; continue; }
     const mIdx = lookupMonthIdx(monRaw);
-    if (mIdx === -1) { skippedMonth++; continue; }
-    if (!byCode[code]) byCode[code] = { s: new Array(24).fill(null), p: new Array(24).fill(null) };
-    if (iSales !== -1) { const v = num(cols[iSales]); if (v != null) byCode[code].s[mIdx] = v; }
-    if (iPurch !== -1) { const v = num(cols[iPurch]); if (v != null) byCode[code].p[mIdx] = v; }
+    if (mIdx !== -1) {
+      if (!byCode[code]) byCode[code] = { s: new Array(24).fill(null), p: new Array(24).fill(null) };
+      if (iSales !== -1) { const v = num(cols[iSales]); if (v != null) byCode[code].s[mIdx] = v; }
+      if (iPurch !== -1) { const v = num(cols[iPurch]); if (v != null) byCode[code].p[mIdx] = v; }
+    }
+    const vS = iSales !== -1 ? num(cols[iSales]) : null;
+    const vP = iPurch !== -1 ? num(cols[iPurch]) : null;
+    if (vS != null) monthRows.s.push({ parentCode: code, ym, qty: vS });
+    if (vP != null) monthRows.p.push({ parentCode: code, ym, qty: vP });
     rows++;
   }
-  return { byCode, count: rows, skippedMonth, skippedBlank, parentCount: Object.keys(byCode).length, layout: 'long' };
+  return { byCode, monthRows, count: rows, skippedMonth, skippedBlank, parentCount: Object.keys(byCode).length, layout: 'long' };
 }
 
 function clearHistoryOverride() {
@@ -4762,7 +5173,10 @@ function isRawHistory(objects) {
 function historyMonthKey(raw) {
   if (!raw) return '';
   const datePart = String(raw).split('|')[0].trim();            // "30-03-2025"
-  const m = datePart.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})/);
+  // ISO date first (anchored), then the ERP's day-first form.
+  let m = datePart.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}`;
+  m = datePart.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})/);
   if (!m) return '';
   let yy = m[3];
   if (yy.length === 2) yy = '20' + yy;
@@ -4915,13 +5329,7 @@ function windowIndexMap(labels) {
   });
   return map;
 }
-// Newest 'yyyy-mm' present across sales+purchase; fallback keeps a valid window.
-function computeDataWindowEnd() {
-  let maxYm = '';
-  const scan = (store) => Object.keys(store).forEach(c => Object.keys(store[c]).forEach(ym => { if (ym > maxYm) maxYm = ym; }));
-  scan(realData.salesByMonth); scan(realData.purchByMonth);
-  return maxYm || '2026-04';
-}
+// (computeDataWindowEnd moved to the server view builder.)
 // ---- Classification helpers (standard inventory heuristics matching D's label sets) ----
 function monthsSinceLastSale(s) {
   for (let i = s.length - 1, k = 0; i >= 0; i--, k++) if ((+s[i] || 0) > 0) return k;
@@ -4929,10 +5337,19 @@ function monthsSinceLastSale(s) {
 }
 function productAgeMonths(launchStr, anchorYm) {
   if (!launchStr) return 24;
-  const m = String(launchStr).match(/(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})/);
-  if (!m) return 24;
-  let ly = m[3]; if (ly.length === 2) ly = '20' + ly;
-  const lym = parseInt(ly, 10) * 12 + parseInt(m[2], 10);
+  const s = String(launchStr).trim();
+  // ISO first, anchored — the old unanchored day-first regex read "2026-05-13"
+  // as year 2013. Then day-first dd-mm-yyyy / dd/mm/yy.
+  let ly, lm;
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) { ly = m[1]; lm = m[2]; }
+  else {
+    m = s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})/);
+    if (!m) return 24;
+    ly = m[3]; if (ly.length === 2) ly = '20' + ly;
+    lm = m[2];
+  }
+  const lym = parseInt(ly, 10) * 12 + parseInt(lm, 10);
   const [ay, am] = anchorYm.split('-').map(n => parseInt(n, 10));
   return Math.max(0, Math.min(24, ay * 12 + am - lym));
 }
@@ -5018,134 +5435,19 @@ function rebuildAggregates() {
   });
   D.folderSummary = Object.values(byFolder).map(g => { g.folder_avg_age = g.parents ? Math.round(g._ageSum / g.parents) : 0; delete g._ageSum; return g; });
 }
-// The orchestrator — called after each raw upload once a real Master is present.
-function rebuildDashboardFromUploads() {
-  if (!realData.masterMap) return;
-  const map = realData.masterMap;
+// (rebuildDashboardFromUploads and rehydrateRealDataFromD are gone: the server
+// now builds the dataset view from the collections — see adoptDataset().)
 
-  // 1) Window from the latest data
-  const endYm = computeDataWindowEnd();
-  const months = build24Window(endYm);
-  const ymIdx = windowIndexMap(months);
-  D.months = months;
-
-  // 2) Lookups: vendors = Suppliers, cats = folders = Categories, subCats empty
-  const vendors = [], vendorIdx = {}, cats = [], catIdx = {};
-  const ensureVendor = (name) => {
-    const clean = (name || '').trim();
-    const keyU = clean.toUpperCase() || '__NONE__';
-    if (vendorIdx[keyU] == null) {
-      vendorIdx[keyU] = vendors.length;
-      vendors.push(clean ? { code: 'V' + String(vendors.length + 1).padStart(3, '0'), name: clean, city: '', skus: 0 }
-                         : { code: '—', name: '(no supplier)', city: '', skus: 0 });
-    }
-    return vendorIdx[keyU];
-  };
-  const ensureCat = (name) => {
-    const clean = (name || '').trim() || '(uncategorized)';
-    const keyU = clean.toUpperCase();
-    if (catIdx[keyU] == null) { catIdx[keyU] = cats.length; cats.push(clean); }
-    return catIdx[keyU];
-  };
-
-  // 3) Products — one per parent
-  const products = [];
-  const okPriority = Math.max(0, D.priorityCodes.indexOf('OK'));
-  Object.keys(map).forEach(pidKey => {
-    const e = map[pidKey];
-    const code = (e.parentCode || '').trim();
-    if (!code) return;
-    const codeU = code.toUpperCase();
-    const v = ensureVendor(e.vendorName);
-    const c = ensureCat(e.categoryName);
-    const s = new Array(24).fill(0), pr = new Array(24).fill(0);
-    const sm = realData.salesByMonth[codeU]; if (sm) Object.keys(sm).forEach(ym => { const i = ymIdx[ym]; if (i != null) s[i] += sm[ym]; });
-    const pm = realData.purchByMonth[codeU]; if (pm) Object.keys(pm).forEach(ym => { const i = ymIdx[ym]; if (i != null) pr[i] += pm[ym]; });
-    const st = realData.stockByCode[codeU] || {};
-    // Uploaded stock file wins; otherwise fall back to the Master's parent-level Stock column.
-    const k = (st.k != null ? +st.k : (+e.stock || 0)), it = +st.it || 0, po = +st.po || 0;
-    const ch = (e.children || []).map(ci => [String(ci.code || ''), null, 0]);
-    vendors[v].skus += 1;
-    products.push({
-      i: parseInt(pidKey, 10), n: code, v, c, fl: c, sc: undefined,
-      s, p: pr, ch, ba: [],
-      k, it, po, av: k + it, tp: k + it + po,
-      a: 0, m: 0, ad: 999, d: 999, f: 0, nr: 0, r: 0, x: 0, t: 99,
-      b: 2, st: 0, mv: 0, ms: 13, pr: okPriority, ps: 0, pa: 24, fa: 24,
-    });
-  });
-
-  D.cats = cats; D.folders = cats; D.vendors = vendors; D.subCats = [];
-  D.products = products;
-
-  // 4) Derived + classification
-  products.forEach(p => {
-    recomputeDerivedStock(p);   // av, ad
-    recomputeSalesDerived(p);   // a, m, ad
-    p.ms = monthsSinceLastSale(p.s);
-    p.pa = productAgeMonths(parentLaunchDates[(p.n || '').toUpperCase().trim()], endYm);
-    p.fa = p.pa;
-    p.t = turnoverRatio(p);
-    p.st = statusIndexFor(p);
-    p.mv = moverIndexFor(p);
-    p.d = p.ad; p.f = Math.round(p.m || 0); p.ps = p.st;
-  });
-  assignABC(products);
-
-  // 5) Aggregates
-  rebuildAggregates();
-
-  // 6) Refresh every view in place
-  realDataMode = true;
-  D.__real = true;   // persisted flag → on reload we skip the demo dummy-vendor step & rehydrate
-  // Embed the PID→parent index IN the cleaned dataset so it persists to Mongo with D and survives
-  // reloads. It CANNOT be reconstructed from D (child ProductIds aren't stored on products), so it
-  // must ride along — otherwise Purchase/Sales/Stock uploads after a reload can't resolve PIDs.
-  // Store a shallow copy (not a live reference) so mutating one never silently changes the other.
-  D.__idIndex = Object.assign({}, productIdToParentCode);
-  const _hw = document.getElementById('histWindowLabel');
-  if (_hw) _hw.textContent = `${D.months[0]} → ${D.months[D.months.length - 1]}`;
-  if (typeof precomputeDemandMeta === 'function') precomputeDemandMeta();
-  renderHeaderAndCharts();
-  if (typeof refreshFilterDatalists === 'function') refreshFilterDatalists();
-  if (typeof renderVendors === 'function') renderVendors();
-  if (typeof renderZoneBrowser === 'function') renderZoneBrowser();
-  if (typeof renderFolderView === 'function') renderFolderView();
+// After a history upload, make sure the freshly saved numbers are actually
+// VISIBLE: a purchases upload while the table shows "Sales only" (or vice
+// versa) looked like the upload did nothing.
+function ensureUploadVisibleInView(isPurch) {
+  const needed = isPurch ? 'purchases' : 'sales';
+  if (currentView === needed || currentView === 'both') return;
+  currentView = 'both';
+  const vs = document.getElementById('viewSelect');
+  if (vs) vs.value = 'both';
   rerender();
-  persistDatasetToMongo();
-}
-
-// On reload, the persisted `D` already holds the real catalog but the in-memory `realData` store
-// is empty — reconstruct it from `D` so further incremental uploads can rebuild correctly.
-function rehydrateRealDataFromD() {
-  const months = D.months || [];
-  const ymOf = (i) => { const [mon, yy] = String(months[i] || '').split('-'); const mm = _MONTH_ABBR.indexOf(mon) + 1; return mm > 0 ? `20${yy}-${String(mm).padStart(2, '0')}` : null; };
-  const map = {}, salesByMonth = {}, purchByMonth = {}, stockByCode = {};
-  (D.products || []).forEach(p => {
-    const codeU = (p.n || '').toUpperCase().trim();
-    map[p.i] = {
-      parentCode: p.n,
-      vendorName: (D.vendors[p.v] || {}).name || '',
-      categoryName: D.cats[p.c] || '',
-      productType: parentProductTypes[codeU] || '',
-      parentLaunchDate: parentLaunchDates[codeU] || '',
-      stock: p.k || 0,
-      children: (p.ch || []).map(c => ({ code: c[0], launchDate: '' })),
-    };
-    stockByCode[codeU] = { k: p.k || 0, it: p.it || 0, po: p.po || 0 };
-    for (let i = 0; i < 24; i++) {
-      const ym = ymOf(i); if (!ym) continue;
-      if (p.s[i]) (salesByMonth[codeU] || (salesByMonth[codeU] = {}))[ym] = p.s[i];
-      if (p.p[i]) (purchByMonth[codeU] || (purchByMonth[codeU] = {}))[ym] = p.p[i];
-    }
-  });
-  realData.masterMap = map;
-  realData.salesByMonth = salesByMonth;
-  realData.purchByMonth = purchByMonth;
-  realData.stockByCode = stockByCode;
-  // Also set the global masterOverride so getProductChildren() shows real child codes (this map
-  // is what we chose NOT to persist separately — it's rebuilt here from the cleaned catalog).
-  masterOverride = map;
 }
 
 // Upload a SALES-only or PURCHASES-only file. Each merges into the shared
@@ -5175,48 +5477,49 @@ function handleHistFileTyped(file, valueType) {
       renderHistoryPreview(stats, aggregates, sampleTx, byCode, {
         key, valueType, containerId: isPurch ? 'purchasePreview' : 'salesPreview', entity: isPurch ? 'Vendor' : 'Customer',
       });
-      if (realDataMode) {
-        // Keep the full month map (upsert: re-uploaded months replace, new months merge) and
-        // rebuild the live dashboard so the window shifts to the latest data.
-        mergeMonthMaps(isPurch ? realData.purchByMonth : realData.salesByMonth, monthByCode);
-        rebuildDashboardFromUploads();
-        const lines = Object.values(monthByCode).reduce((s, m) => s + Object.keys(m).length, 0);
+      // Server merge: per-(code, month) upsert — new months are added, re-uploaded
+      // months are replaced, everything else (incl. months outside the current
+      // window) is stored and kept forever.
+      const rows = [];
+      Object.keys(monthByCode).forEach(code => {
+        Object.keys(monthByCode[code]).forEach(ym => rows.push({ parentCode: code, ym, qty: monthByCode[code][ym] }));
+      });
+      return postUpload('/api/uploads/history', {
+        fileName: file.name, source: 'file', valueType: isPurch ? 'purchases' : 'sales', rows,
+      }).then(res => {
+        adoptDataset(res.data);
+        ensureUploadVisibleInView(isPurch);
         if (subStatus) subStatus.innerHTML = `<strong>${label}</strong> — <span style="color:var(--green)">${fmt(stats.resolvedRows)}</span> lines · ${fmt(Object.keys(monthByCode).length)} parents · <span style="color:var(--accent)">${file.name}</span>`;
-        setHistStatus(`<strong>${label} loaded &amp; dashboard rebuilt</strong> — window now ${D.months[0]} → ${D.months[D.months.length - 1]}`, 'ok');
+        setHistStatus(`<strong>${label} saved</strong> — <strong>${fmt(res.counts.merged)}</strong> product-months stored · window now ${D.months[0]} → ${D.months[D.months.length - 1]}`, 'ok');
         document.getElementById('histUploadDetail').innerHTML = `${fmt(stats.droppedUnresolved)} line(s) with unresolved PID`;
         document.getElementById('histReset').style.display = '';
-        return;
-      }
-      // Demo-overlay mode (no real Master built yet): feed the existing 24-month engine.
-      mergeHistoryByCode(byCode, key, file.name, stats.resolvedRows);
-      const { matched, unmatched } = applyHistoryOverride(historyOverride);
-      saveHistoryOverride();
-      if (subStatus) subStatus.innerHTML = `<strong>${label}</strong> — <span style="color:var(--green)">${fmt(stats.resolvedRows)}</span> lines · ${fmt(stats.parents)} parents · <span style="color:var(--accent)">${file.name}</span>`;
-      setHistStatus(`<strong>${label} cleaned &amp; loaded</strong> — <strong>${fmt(stats.parents)}</strong> parents · <strong style="color:var(--green)">${fmt(matched)}</strong> matched to products`, 'ok');
-      const notes = [`${fmt(stats.droppedOutOfWindow)} line(s) out of the 24-month window`, `${fmt(stats.droppedUnresolved)} line(s) with unresolved PID`];
-      if (unmatched > 0) notes.push(`${fmt(unmatched)} products kept their original data (no match)`);
-      document.getElementById('histUploadDetail').innerHTML = notes.join(' · ');
-      document.getElementById('histReset').style.display = '';
-      rerender();
-      persistDatasetToMongo();
-      return;
+      }).catch(err => setHistStatus('Error saving ' + label.toLowerCase() + ': ' + (err.message || err), 'err'));
     }
-    // ===== Clean-schema path (parent_code, month, sales|purchases) — unchanged =====
+    // ===== Clean-schema path (parent_code, month, sales|purchases) =====
     { const pv = document.getElementById(isPurch ? 'purchasePreview' : 'salesPreview'); if (pv) { pv.style.display = 'none'; pv.innerHTML = ''; } }
     const parsed = parseHistoryCSV(csvText, valueType);
-    mergeHistoryByCode(parsed.byCode, key, file.name, parsed.count);
-    const { matched, unmatched } = applyHistoryOverride(historyOverride);
-    saveHistoryOverride();
-    if (subStatus) subStatus.innerHTML = `<strong>${label}</strong> — <span style="color:var(--green)">${fmt(parsed.count)}</span> rows · ${fmt(parsed.parentCount)} parents · <span style="color:var(--accent)">${file.name}</span>`;
-    setHistStatus(`<strong>${label} loaded</strong> — <strong>${fmt(parsed.parentCount)}</strong> parents in this file · <strong style="color:var(--green)">${fmt(matched)}</strong> total matched to products`, 'ok');
-    const skipNotes = [];
-    if (parsed.skippedMonth > 0) skipNotes.push(`${fmt(parsed.skippedMonth)} row(s) had unrecognized month`);
-    if (parsed.skippedBlank > 0) skipNotes.push(`${fmt(parsed.skippedBlank)} row(s) had blank parent_code`);
-    if (unmatched > 0) skipNotes.push(`${fmt(unmatched)} products kept their original data (no match)`);
-    document.getElementById('histUploadDetail').innerHTML = skipNotes.join(' · ') || `${label} rows applied cleanly`;
-    document.getElementById('histReset').style.display = '';
-    rerender();
-    persistDatasetToMongo();
+    // The parser separates real-dated sales and purchase rows; send each side to
+    // the server (this path used to bypass persistence entirely and lose data).
+    const sends = [];
+    if (parsed.monthRows.s.length) sends.push({ valueType: 'sales', rows: parsed.monthRows.s });
+    if (parsed.monthRows.p.length) sends.push({ valueType: 'purchases', rows: parsed.monthRows.p });
+    if (!sends.length) {
+      setHistStatus(`<span style="color:var(--red)">No usable ${label.toLowerCase()} rows found in this file</span>`, 'err');
+      return;
+    }
+    return sends.reduce((chain, s) => chain.then(() =>
+      postUpload('/api/uploads/history', { fileName: file.name, source: 'file', valueType: s.valueType, rows: s.rows })
+    ), Promise.resolve()).then(() => fetch('/api/data', { cache: 'no-store' }).then(r => r.json())).then(data => {
+      adoptDataset(data);
+      ensureUploadVisibleInView(isPurch);
+      if (subStatus) subStatus.innerHTML = `<strong>${label}</strong> — <span style="color:var(--green)">${fmt(parsed.count)}</span> rows · ${fmt(parsed.parentCount)} parents · <span style="color:var(--accent)">${file.name}</span>`;
+      setHistStatus(`<strong>${label} saved</strong> — <strong>${fmt(parsed.parentCount)}</strong> parents in this file · window now ${D.months[0]} → ${D.months[D.months.length - 1]}`, 'ok');
+      const skipNotes = [];
+      if (parsed.skippedMonth > 0) skipNotes.push(`${fmt(parsed.skippedMonth)} row(s) had unrecognized month`);
+      if (parsed.skippedBlank > 0) skipNotes.push(`${fmt(parsed.skippedBlank)} row(s) had blank parent_code`);
+      document.getElementById('histUploadDetail').innerHTML = skipNotes.join(' · ') || `${label} rows applied cleanly`;
+      document.getElementById('histReset').style.display = '';
+    }).catch(err => setHistStatus('Error saving ' + label.toLowerCase() + ': ' + (err.message || err), 'err'));
   }).catch(err => {
     if (subStatus) subStatus.innerHTML = `<strong>${label}</strong> — <span style="color:var(--red)">Error: ${err.message || 'failed to parse'}</span>`;
   })
@@ -5275,6 +5578,53 @@ document.getElementById('histReset').addEventListener('click', () => {
   });
 })();
 
+// ===== Delete one month's data (sales / purchases / both) =====
+function refreshDeleteMonthPicker() {
+  const sel = document.getElementById('delMonthSelect');
+  if (!sel) return;
+  fetch('/api/uploads/months').then(r => r.json()).then(months => {
+    if (!Array.isArray(months) || !months.length) {
+      sel.innerHTML = '<option value="">No history stored yet</option>';
+      return;
+    }
+    const MN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">— Choose a month —</option>' + months.map(m => {
+      const [y, mo] = m.ym.split('-').map(n => parseInt(n, 10));
+      const label = `${MN[mo - 1]} ${y} · sales ${fmt(m.salesQty)} · purch ${fmt(m.purchQty)}`;
+      return `<option value="${m.ym}">${label}</option>`;
+    }).join('');
+    if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+  }).catch(() => { sel.innerHTML = '<option value="">Could not load months</option>'; });
+}
+(function setupDeleteMonth() {
+  const btn = document.getElementById('delMonthBtn');
+  const sel = document.getElementById('delMonthSelect');
+  const sideSel = document.getElementById('delMonthSide');
+  const status = document.getElementById('delMonthStatus');
+  if (!btn || !sel) return;
+  refreshDeleteMonthPicker();
+  btn.addEventListener('click', async () => {
+    const ym = sel.value;
+    const side = sideSel.value;
+    if (!ym) { if (status) status.textContent = 'Pick a month first.'; return; }
+    const label = sel.options[sel.selectedIndex].textContent.split('·')[0].trim();
+    const what = side === 'both' ? 'ALL sales and purchase data' : side === 'sales' ? 'the SALES data' : 'the PURCHASE data';
+    if (!confirm(`Delete ${what} of ${label} from the database?\n\nEvery other month, all products and stock stay untouched.`)) return;
+    if (!confirm('Are you sure? This cannot be undone.')) return;
+    if (status) status.textContent = 'Deleting…';
+    try {
+      const res = await postUpload('/api/uploads/delete-month', { ym, side });
+      adoptDataset(res.data);
+      refreshDeleteMonthPicker();
+      const c = res.counts || {};
+      if (status) status.textContent = `Deleted ${label} (${side}) — ${fmt((c.blankedRows || 0) + (c.removedRows || 0))} record(s) affected.`;
+    } catch (err) {
+      if (status) status.textContent = 'Error: ' + (err.message || 'delete failed');
+    }
+  });
+})();
+
 (function setupClearAllData() {
   const btn = document.getElementById('clearAllDataBtn');
   if (!btn) return;
@@ -5300,40 +5650,58 @@ document.getElementById('histReset').addEventListener('click', () => {
     }
   });
 })();
-// Restore previous history override from localStorage
-try {
-  const savedHist = localStorage.getItem(HIST_OVERRIDE_KEY);
-  if (savedHist) {
-    historyOverride = JSON.parse(savedHist);
-    const { matched, unmatched } = applyHistoryOverride(historyOverride);
-    setHistStatus(`<strong>History loaded</strong> from previous session (<strong style="color:var(--accent)">${historyOverride.fileName || 'CSV'}</strong>) — <strong>${fmt(historyOverride.count)}</strong> rows · <strong style="color:var(--green)">${fmt(matched)}</strong> matched`, 'ok');
-    document.getElementById('histUploadDetail').textContent = `${fmt(unmatched)} products kept their original data (no match in CSV)`;
-    document.getElementById('histReset').style.display = '';
-  }
-} catch (e) {}
+// (The old restore-from-localStorage history replay is gone: history lives in
+// the database now and arrives already applied inside the dataset view. The
+// saved override was slot-indexed against whatever window existed when it was
+// written, so replaying it grafted values into the WRONG months after a shift.)
+try { localStorage.removeItem(HIST_OVERRIDE_KEY); } catch (e) {}
 
-// ===== Theme toggle (dark / light) =====
+// ===== Theme system: mode (dark/light) × accent palette (violet/ocean/emerald) =====
+// Picked from the topbar theme dropdown; the sidebar toggle still flips the mode.
+// Everything — surfaces, text, buttons, and charts — re-skins instantly.
 (function setupTheme() {
   const KEY = 'invDashTheme';
-  let saved = 'dark';
-  try { saved = localStorage.getItem(KEY) || 'dark'; } catch (e) { /* localStorage may be blocked */ }
-  if (saved !== 'dark' && saved !== 'light') saved = 'dark';
+  const PAL_KEY = 'invDashPalette';
+  const PALETTES = ['violet', 'ocean', 'emerald'];
+  let mode = 'dark', palette = 'violet';
+  try {
+    mode = localStorage.getItem(KEY) || 'dark';
+    palette = localStorage.getItem(PAL_KEY) || 'violet';
+  } catch (e) { /* localStorage may be blocked */ }
+  if (mode !== 'dark' && mode !== 'light') mode = 'dark';
+  if (!PALETTES.includes(palette)) palette = 'violet';
 
-  function apply(theme) {
-    document.documentElement.setAttribute('data-theme', theme);
+  function apply(newMode, newPalette) {
+    const prev = document.documentElement.getAttribute('data-theme') + ':' + document.documentElement.getAttribute('data-palette');
+    mode = newMode; palette = newPalette;
+    document.documentElement.setAttribute('data-theme', mode);
+    document.documentElement.setAttribute('data-palette', palette);
     document.querySelectorAll('#themeToggle span').forEach(s => {
-      s.classList.toggle('active', s.dataset.themeVal === theme);
+      s.classList.toggle('active', s.dataset.themeVal === mode);
     });
-    try { localStorage.setItem(KEY, theme); } catch (e) { /* ignore */ }
+    const sel = document.getElementById('themeSelect');
+    if (sel) sel.value = mode + ':' + palette;
+    try { localStorage.setItem(KEY, mode); localStorage.setItem(PAL_KEY, palette); } catch (e) { /* ignore */ }
+    // Mirror into a plain cookie so the login page (which renders BEFORE the
+    // authenticated state is available) can match the chosen theme.
+    try { document.cookie = `inv_theme=${mode}:${palette}; Path=/; Max-Age=31536000; SameSite=Lax`; } catch (e) { /* ignore */ }
+    // Charts pull their colors from CSS variables — rebuild whenever the
+    // effective theme changes (including the initial restore: the charts were
+    // created before this runs, with the default dark tokens).
+    if (prev !== mode + ':' + palette && typeof renderHeaderAndCharts === 'function') renderHeaderAndCharts();
   }
 
-  apply(saved);
+  apply(mode, palette);
 
   const toggle = document.getElementById('themeToggle');
-  if (toggle) {
-    toggle.addEventListener('click', () => {
-      const current = document.documentElement.getAttribute('data-theme') || 'dark';
-      apply(current === 'dark' ? 'light' : 'dark');
+  if (toggle) toggle.addEventListener('click', () => apply(mode === 'dark' ? 'light' : 'dark', palette));
+
+  const sel = document.getElementById('themeSelect');
+  if (sel) {
+    sel.value = mode + ':' + palette;
+    sel.addEventListener('change', () => {
+      const [m, p] = sel.value.split(':');
+      apply(m === 'light' ? 'light' : 'dark', PALETTES.includes(p) ? p : 'violet');
     });
   }
 })();
@@ -5400,9 +5768,14 @@ function assignDummyVendorNames() {
 // the in-memory realData store so further uploads rebuild correctly.
 if (D && D.__real) {
   realDataMode = true;
-  // Restore the PID→parent index that was persisted inside the cleaned dataset (so uploads work).
+  // Restore the PID→parent index served with the dataset view (so uploads work).
   if (D.__idIndex && typeof D.__idIndex === 'object') Object.assign(productIdToParentCode, D.__idIndex);
-  rehydrateRealDataFromD();
+  // Seed launch dates / product types from the server's master data (values the
+  // user saved locally win), then rebuild the child-code map for the UI.
+  const _meta = D.meta || {};
+  Object.keys(_meta.launchDates || {}).forEach(k => { if (!parentLaunchDates[k]) parentLaunchDates[k] = _meta.launchDates[k]; });
+  Object.keys(_meta.productTypes || {}).forEach(k => { if (!parentProductTypes[k]) parentProductTypes[k] = _meta.productTypes[k]; });
+  rebuildMasterOverrideFromD();
 } else if (!(D && D.__empty)) {
   // Legacy demo dataset only — an EMPTY dataset must stay empty (no synthetic vendors).
   assignDummyVendorNames();
@@ -5411,6 +5784,9 @@ if (D && D.__real) {
 // replaced. (refreshFilterDatalists runs once during initial setup BEFORE this, so without this
 // extra call the vendor dropdown would still show stale embedded vendor names like "VND011 — …".)
 if (typeof refreshFilterDatalists === 'function') refreshFilterDatalists();
+// Topbar pills (data-through / last upload), footer stats and the upload log
+// reflect the database state on every load, real data or blank.
+updateTopbarMeta();
 
 // ===== Dummy folder rename =====
 // Parent and child folder names are kept SEPARATE — parents use one 4-name set, children another.
@@ -5599,7 +5975,7 @@ if (typeof refreshFilterDatalists === 'function') refreshFilterDatalists();
 // dashboard can fetch (cross-origin to a static HTML file requires public CSV).
 const GSYNC_URL_KEY = 'inventoryGsheetUrls';
 const gsyncTargets = [
-  { key: 'master', label: 'Master Mapping',   sheetId: '14hrdKKF4Jjq0txTXmQbJUJI0Oex2QOtBM1p80HQuaOw', tint: 'rgba(212,255,58,0.12)',  border: 'rgba(212,255,58,0.40)' },
+  { key: 'master', label: 'Master Mapping',   sheetId: '14hrdKKF4Jjq0txTXmQbJUJI0Oex2QOtBM1p80HQuaOw', tint: 'rgba(139,124,255,0.12)',  border: 'rgba(139,124,255,0.40)' },
   { key: 'stock',  label: 'Stock Levels',     sheetId: '1aCk1qusvja0myPw70k42VOs2MqaX6danylfuwMixf_w', tint: 'rgba(92,171,255,0.12)',  border: 'rgba(92,171,255,0.40)' },
   { key: 'sales',  label: 'Sales History',    sheetId: '1n7Y6IzBWZg0yxwquDGUDzO9FZskw9RONoP6Bp7WbVDI', tint: 'rgba(58,255,182,0.12)',  border: 'rgba(58,255,182,0.40)' },
   { key: 'purch',  label: 'Purchase History', sheetId: '1uKfGiwat-sUVm9F5VchF8bQLqYaKCNTBCLsZu5Onbh8', tint: 'rgba(255,92,58,0.12)',   border: 'rgba(255,92,58,0.40)' },
@@ -5630,7 +6006,7 @@ function gsyncRender() {
     return `<div style="background: var(--bg-2); border: 1px solid var(--line); border-left: 3px solid ${t.border.replace('0.40', '0.9')}; padding: 10px 14px; border-radius: 3px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
         <strong style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; color: var(--text);">${t.label.toUpperCase()}</strong>
-        <a href="${openUrl}" target="_blank" rel="noopener" style="font-family: var(--mono); font-size: 10px; color: var(--accent); text-decoration: none; border: 1px solid rgba(212,255,58,0.4); padding: 3px 8px; border-radius: 2px; background: rgba(212,255,58,0.05);">↗ Open Google Sheet</a>
+        <a href="${openUrl}" target="_blank" rel="noopener" style="font-family: var(--mono); font-size: 10px; color: var(--accent); text-decoration: none; border: 1px solid rgba(139,124,255,0.4); padding: 3px 8px; border-radius: 2px; background: rgba(139,124,255,0.05);">↗ Open Google Sheet</a>
       </div>
       <input type="text" data-gsync-key="${t.key}" value="${u.replace(/"/g, '&quot;')}" placeholder="Paste a published-CSV URL or an /export?format=xlsx URL"
         style="width: 100%; background: var(--bg); border: 1px solid var(--line); padding: 7px 10px; color: var(--text); font-family: var(--mono); font-size: 11px; outline: none; box-sizing: border-box;">
@@ -5720,47 +6096,50 @@ async function gsyncFetchOne(key) {
       text = new TextDecoder('utf-8').decode(u8);
     }
     if (!text || text.length < 4) throw new Error('Empty parsed content');
-    // Route to the right parser/applier based on key
+    // Route each sheet through the SAME server merge endpoints as manual uploads
+    // (this path used to write browser-only overrides that were silently lost).
+    const srcLabel = target.label + ' (Google Sheets)';
+    let lastData = null;
     if (key === 'master') {
       const result = parseMasterCSV(text);
       if (!result || result.error) throw new Error(result ? result.error : 'parse failed');
-      applyMasterOverride(result.map, target.label + ' (Google Sheets)', result.zonesByFolder);
+      applyMasterOverride(result.map, srcLabel, result.zonesByFolder);
+      const res = await postUpload('/api/uploads/master', { fileName: srcLabel, source: 'gsheet', rows: masterMapToRows(result.map) });
+      lastData = res.data;
     } else if (key === 'stock') {
       const parsed = parseStockCSV(text);
-      stockOverride = { byCode: parsed.byCode, count: parsed.count, uploadedAt: new Date().toISOString(), fileName: target.label + ' (Google Sheets)' };
-      applyStockOverride(stockOverride);
-      saveStockOverride();
-      setStockStatus(`<strong>Stock synced</strong> from Google Sheets — <strong>${fmt(parsed.count)}</strong> rows`, 'ok');
-      document.getElementById('stockReset').style.display = '';
-      rerender();
+      const rows = Object.keys(parsed.byCode).map(code => {
+        const src = parsed.byCode[code];
+        return { parentCode: code, k: src.k != null ? src.k : null, it: src.it != null ? src.it : null, po: src.po != null ? src.po : null };
+      });
+      if (rows.length) {
+        const res = await postUpload('/api/uploads/stock', { fileName: srcLabel, source: 'gsheet', rows });
+        lastData = res.data;
+        setStockStatus(`<strong>Stock synced</strong> from Google Sheets — <strong>${fmt(parsed.count)}</strong> rows`, 'ok');
+        document.getElementById('stockReset').style.display = '';
+      }
     } else if (key === 'sales' || key === 'purch') {
-      // For separate sales/purchase tabs, hint to the parser which value column to fill.
-      // This is essential for wide-format sheets (months as columns) since the headers themselves
-      // don't say "sales" vs "purchases" — the hint comes from the sync target.
+      // The sync target says which side the sheet holds (essential for wide-format
+      // sheets whose headers are just month names).
       const valueType = key === 'sales' ? 'sales' : 'purchases';
       const parsed = parseHistoryCSV(text, valueType);
-      // Merge into existing historyOverride so two sheets together = full history
-      if (!historyOverride) historyOverride = { byCode: {}, count: 0, parentCount: 0, fileName: 'Google Sheets sync' };
-      Object.keys(parsed.byCode).forEach(code => {
-        if (!historyOverride.byCode[code]) historyOverride.byCode[code] = { s: new Array(24).fill(null), p: new Array(24).fill(null) };
-        const src = parsed.byCode[code];
-        for (let i = 0; i < 24; i++) {
-          if (src.s[i] != null) historyOverride.byCode[code].s[i] = src.s[i];
-          if (src.p[i] != null) historyOverride.byCode[code].p[i] = src.p[i];
-        }
-      });
-      historyOverride.count = (historyOverride.count || 0) + parsed.count;
-      historyOverride.parentCount = Object.keys(historyOverride.byCode).length;
-      historyOverride.uploadedAt = new Date().toISOString();
-      historyOverride.fileName = 'Google Sheets sync (sales + purchases)';
-      applyHistoryOverride(historyOverride);
-      saveHistoryOverride();
-      setHistStatus(`<strong>History synced</strong> from Google Sheets — <strong>${fmt(historyOverride.count)}</strong> total rows across ${fmt(historyOverride.parentCount)} parents`, 'ok');
-      document.getElementById('histReset').style.display = '';
-      rerender();
+      const sideRows = valueType === 'purchases' ? parsed.monthRows.p : parsed.monthRows.s;
+      const otherRows = valueType === 'purchases' ? parsed.monthRows.s : parsed.monthRows.p;
+      if (sideRows.length) {
+        const res = await postUpload('/api/uploads/history', { fileName: srcLabel, source: 'gsheet', valueType, rows: sideRows });
+        lastData = res.data;
+      }
+      if (otherRows.length) {
+        const res = await postUpload('/api/uploads/history', { fileName: srcLabel, source: 'gsheet', valueType: valueType === 'purchases' ? 'sales' : 'purchases', rows: otherRows });
+        lastData = res.data;
+      }
+      if (sideRows.length || otherRows.length) {
+        setHistStatus(`<strong>History synced</strong> from Google Sheets — <strong>${fmt(parsed.count)}</strong> rows across ${fmt(parsed.parentCount)} parents`, 'ok');
+        document.getElementById('histReset').style.display = '';
+      }
     }
     if (statusEl) statusEl.innerHTML = '<span style="color: var(--green);">✓ Synced</span>';
-    return { key, ok: true };
+    return { key, ok: true, data: lastData };
   } catch (err) {
     if (statusEl) statusEl.innerHTML = `<span style="color: var(--red);">${_gsyncErrorMessage(err)}</span>`;
     return { key, error: err };
@@ -5787,13 +6166,15 @@ async function gsyncRunAll() {
   if (status) status.innerHTML = '<span style="color: var(--blue);">Syncing all sheets…</span>';
   try { localStorage.setItem(GSYNC_URL_KEY, JSON.stringify(gsyncUrls)); } catch (e) {}
   const order = ['master', 'stock', 'sales', 'purch'];
-  let ok = 0, errored = 0, skipped = 0;
+  let ok = 0, errored = 0, skipped = 0, lastData = null;
   for (const key of order) {
     const r = await gsyncFetchOne(key);
-    if (r.ok) ok++;
+    if (r.ok) { ok++; if (r.data) lastData = r.data; }
     else if (r.error) errored++;
     else if (r.skipped) skipped++;
   }
+  // Adopt once, after the whole sequence — the last response reflects all merges.
+  if (lastData) adoptDataset(lastData);
   const parts = [];
   if (ok > 0) parts.push(`<span style="color: var(--green);">${ok} synced</span>`);
   if (errored > 0) parts.push(`<span style="color: var(--red);">${errored} failed</span>`);
@@ -5814,13 +6195,14 @@ document.getElementById('gsyncAllBtn').addEventListener('click', async () => {
   try { localStorage.setItem(GSYNC_URL_KEY, JSON.stringify(gsyncUrls)); } catch (e) {}
   // Sequential — order matters: master first (sets zones/vendors), then stock, then sales/purchases
   const order = ['master', 'stock', 'sales', 'purch'];
-  let ok = 0, errored = 0, skipped = 0;
+  let ok = 0, errored = 0, skipped = 0, lastData = null;
   for (const key of order) {
     const r = await gsyncFetchOne(key);
-    if (r.ok) ok++;
+    if (r.ok) { ok++; if (r.data) lastData = r.data; }
     else if (r.error) errored++;
     else if (r.skipped) skipped++;
   }
+  if (lastData) adoptDataset(lastData);
   const parts = [];
   if (ok > 0) parts.push(`<span style="color: var(--green);">${ok} synced</span>`);
   if (errored > 0) parts.push(`<span style="color: var(--red);">${errored} failed</span>`);

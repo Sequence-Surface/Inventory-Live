@@ -2,6 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
 import './styles/dashboard.css';
+import './styles/shell.css';
 
 // NOTE: intentionally NOT wrapped in <React.StrictMode>. StrictMode double-
 // invokes effects in development, which would run the imperative dashboard
