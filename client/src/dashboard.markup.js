@@ -229,24 +229,28 @@ export const DASHBOARD_HTML = `
         <div class="filter-label"><svg class="flt-icn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>Search product <span class="ms-count" id="searchCount"></span></div>
         <input class="ms-input" id="searchInput" placeholder="Search &amp; select products…" autocomplete="off">
         <div class="ms-chips" id="searchChips"></div>
+        <div class="filter-hint">Find products by name &mdash; pick several to compare</div>
       </div>
       <div class="filter-group multi" data-filter="cat">
         <div class="filter-label"><svg class="flt-icn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r="1"/></svg>Category <span class="ms-count" id="catCount"></span></div>
         <input class="ms-input" id="catFilter" placeholder="Search &amp; select categories…" autocomplete="off">
         <datalist id="catList"></datalist>
         <div class="ms-chips" id="catChips"></div>
+        <div class="filter-hint">Only products from the chosen categories</div>
       </div>
       <div class="filter-group multi" data-filter="vendor">
         <div class="filter-label"><svg class="flt-icn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.62l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg>Vendor <span class="ms-count" id="vendorCount"></span></div>
         <input class="ms-input" id="vendorFilter" placeholder="Search &amp; select vendors…" autocomplete="off">
         <datalist id="vendorList"></datalist>
         <div class="ms-chips" id="vendorChips"></div>
+        <div class="filter-hint">Only products bought from these suppliers</div>
       </div>
       <div class="filter-group multi" data-filter="folder">
         <div class="filter-label"><svg class="flt-icn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>Folder <span class="ms-count" id="folderCount"></span></div>
         <input class="ms-input" id="folderFilter" placeholder="Search &amp; select folders…" autocomplete="off">
         <datalist id="folderList"></datalist>
         <div class="ms-chips" id="folderChips"></div>
+        <div class="filter-hint">Limit the table to specific folders</div>
       </div>
       <div class="filter-group multi" data-filter="abc">
         <div class="filter-label"><svg class="flt-icn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/><path d="m22 12.18-9.17 4.16a2 2 0 0 1-1.66 0L2 12.18"/><path d="m22 17.18-9.17 4.16a2 2 0 0 1-1.66 0L2 17.18"/></svg>ABC class <span class="ms-count" id="abcCount"></span></div>
@@ -255,6 +259,7 @@ export const DASHBOARD_HTML = `
           <button class="ms-toggle" data-val="1">B</button>
           <button class="ms-toggle" data-val="2">C</button>
         </div>
+        <div class="filter-hint">A = top sellers that drive 80% of sales</div>
       </div>
       <div class="filter-group multi" data-filter="status">
         <div class="filter-label"><svg class="flt-icn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg>Status <span class="ms-count" id="statusCount"></span></div>
@@ -262,6 +267,55 @@ export const DASHBOARD_HTML = `
         <div class="combo-panel" id="statusPanel">
           <div class="ms-toggles vertical" id="statusToggles"></div>
         </div>
+        <div class="filter-hint">Stock health &mdash; critical, low, healthy, overstocked&hellip;</div>
+      </div>
+      <div class="filter-group" data-filter="mover">
+        <div class="filter-label"><svg class="flt-icn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="m3 6 1 1 2-2"/><path d="m3 12 1 1 2-2"/><path d="m3 18 1 1 2-2"/></svg>Movement <span class="ms-count" id="moverCount2"></span></div>
+        <select class="ui-select" id="moverFilterSel">
+          <option value="">All movement</option>
+          <option value="Active">Active (sold recently)</option>
+          <option value="Sluggish (3-6m)">Sluggish &middot; 3&ndash;6 months</option>
+          <option value="Slow (6-12m)">Slow &middot; 6&ndash;12 months</option>
+          <option value="Non-Moving (12m+)">Non-moving &middot; 12+ months</option>
+          <option value="No Stock">No stock &amp; no sales</option>
+        </select>
+        <div class="filter-hint">How recently each product last sold</div>
+      </div>
+      <div class="filter-group" data-filter="demand">
+        <div class="filter-label"><svg class="flt-icn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12h3l3-9 4 18 3-9h3"/><path d="M18 12h4"/></svg>Demand type <span class="ms-count" id="demandCount2"></span></div>
+        <select class="ui-select" id="demandFilterSel" title="The demand-shape badge shown on every row (drives the Auto reorder formula)">
+          <option value="">All demand types</option>
+          <option value="smooth">Smooth &middot; steady sellers</option>
+          <option value="trending">Trending &middot; recent shift</option>
+          <option value="intermittent">Intermittent &middot; many zero months</option>
+          <option value="lumpy">Lumpy &middot; project orders</option>
+          <option value="erratic">Erratic &middot; unpredictable</option>
+          <option value="dead">Dead &middot; no sales 6m</option>
+        </select>
+        <div class="filter-hint">The sales pattern the reorder maths uses</div>
+      </div>
+      <div class="filter-group" data-filter="stocklvl">
+        <div class="filter-label"><svg class="flt-icn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v20"/><path d="m19 15-7 7-7-7"/><rect x="4" y="2" width="16" height="8" rx="2"/></svg>Stock level <span class="ms-count" id="stockLvlCount2"></span></div>
+        <select class="ui-select" id="stockLvlFilterSel">
+          <option value="">All stock levels</option>
+          <option value="instock">In stock</option>
+          <option value="outstock">Out of stock</option>
+          <option value="pipeline">Has pipeline (transit / PO)</option>
+          <option value="cover15">Cover under 15 days</option>
+          <option value="cover30">Cover under 30 days</option>
+          <option value="over180">Overcovered &middot; 180+ days</option>
+        </select>
+        <div class="filter-hint">What's in stock, out of stock, or running low</div>
+      </div>
+      <div class="filter-group" data-filter="age">
+        <div class="filter-label"><svg class="flt-icn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/></svg>Product age <span class="ms-count" id="ageCount2"></span></div>
+        <select class="ui-select" id="ageFilterSel" title="Months since the product's launch date (from your master)">
+          <option value="">All ages</option>
+          <option value="new3">New &middot; launched &le;3 months</option>
+          <option value="young6">Young &middot; launched &le;6 months</option>
+          <option value="est">Established &middot; over 6 months</option>
+        </select>
+        <div class="filter-hint">Time since the product was launched</div>
       </div>
     </div>
 
@@ -280,6 +334,7 @@ export const DASHBOARD_HTML = `
             <span style="color:var(--text-3); font-family:var(--mono); font-size:11px">→</span>
             <select id="customEnd" class="ui-select"></select>
           </div>
+        <div class="filter-hint">How many months the table shows</div>
         </div>
         <div class="filter-group">
           <div class="filter-label"><svg class="flt-icn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></svg>View</div>
@@ -288,6 +343,7 @@ export const DASHBOARD_HTML = `
             <option value="purchases">Purchases only</option>
             <option value="both">Sales + Purchases</option>
           </select>
+        <div class="filter-hint">Show sales, purchases, or both in the table</div>
         </div>
         <div class="filter-group" style="display:flex; align-items:center; justify-content:center; gap:14px;">
           <span style="font-family:var(--mono); font-size:10px; color:var(--text-3); letter-spacing:0.1em;">
@@ -336,40 +392,40 @@ export const DASHBOARD_HTML = `
       <div class="planning-bar">
         <div class="planning-row">
           <div class="planning-label">PLAN STOCK FOR:</div>
-          <div class="btn-group" id="planningGroup">
-            <button class="btn" data-days="30">30 days</button>
-            <button class="btn" data-days="45">45 days</button>
-            <button class="btn active" data-days="60">60 days</button>
-            <button class="btn" data-days="75">75 days</button>
-            <button class="btn" data-days="90">90 days</button>
-            <button class="btn" data-days="120">120 days</button>
-            <button class="btn" data-days="abc">By ABC</button>
-          </div>
+          <select class="ui-select planning-select" id="planningSelect">
+            <option value="30">30 days</option>
+            <option value="45">45 days</option>
+            <option value="60" selected>60 days</option>
+            <option value="75">75 days</option>
+            <option value="90">90 days</option>
+            <option value="120">120 days</option>
+            <option value="abc">By ABC class (A 30 &middot; B 60 &middot; C 90)</option>
+          </select>
           <div class="planning-info" style="font-size:10px; line-height: 1.5;" id="planningInfo">
             <!-- populated by renderPlanningInfo() — reflects the currently-selected planning days -->
           </div>
         </div>
         <div class="planning-row">
           <div class="planning-label" title="How to estimate monthly demand from sales history. Auto routes per-SKU based on its detected demand pattern (Smooth / Lumpy / Intermittent / Trending / Erratic / Dead).">DEMAND BASIS:</div>
-          <div class="btn-group" id="demandBasisGroup">
-            <button class="btn active" data-method="auto"     title="Recommended. Auto-classifies each SKU and uses the right formula: Smooth→Mean, Trending→Weighted recent, Lumpy→Median (excluding spikes), Intermittent→Median 12m, Erratic→Median 6m, Dead→0.">Auto</button>
-            <button class="btn"        data-method="mean6"    title="Force arithmetic mean of last 6 months sales for every SKU. Inflated by one-off spikes.">Mean 6m</button>
-            <button class="btn"        data-method="median6"  title="Force median of last 6 months for every SKU. Ignores one-off spikes.">Median 6m</button>
-            <button class="btn"        data-method="trimmed6" title="Force-drop the single highest month, average the rest.">Trimmed 6m</button>
-            <button class="btn"        data-method="median12" title="Force median of last 12 months. Slower-moving, smoothes seasonality.">Median 12m</button>
-          </div>
+          <select class="ui-select planning-select" id="demandBasisSelect" title="How to estimate monthly demand from sales history">
+            <option value="auto" selected>Auto (recommended)</option>
+            <option value="mean6">Mean of last 6 months</option>
+            <option value="median6">Median of last 6 months</option>
+            <option value="trimmed6">Trimmed mean 6 months</option>
+            <option value="median12">Median of last 12 months</option>
+          </select>
           <div class="planning-info" style="font-size:10px; line-height: 1.5;" id="demandInfo">
             <!-- populated by renderDemandInfo() — reflects the currently-selected method -->
           </div>
         </div>
         <div class="planning-row">
           <div class="planning-label">SHOW:</div>
-          <div class="btn-group" id="reorderScopeGroup">
-            <button class="btn active" data-scope="needed">Need order now <span id="scopeNeededCount" class="scope-count"></span></button>
-            <button class="btn" data-scope="auto">Auto-flagged <span id="scopeAutoCount" class="scope-count"></span></button>
-            <button class="btn" data-scope="manual">Manual added <span id="scopeManualCount" class="scope-count"></span></button>
-            <button class="btn" data-scope="all">All <span id="scopeAllCount" class="scope-count"></span></button>
-          </div>
+          <select class="ui-select planning-select" id="reorderScopeSelect">
+            <option value="needed" selected>Need order now</option>
+            <option value="auto">Auto-flagged</option>
+            <option value="manual">Manual added</option>
+            <option value="all">All</option>
+          </select>
           <div class="planning-info" style="font-size:10px; line-height: 1.5;" id="scopeInfo">
             <!-- populated by renderScopeInfo() — reflects the currently-selected scope -->
           </div>
@@ -377,7 +433,7 @@ export const DASHBOARD_HTML = `
       </div>
       <div class="manual-add-bar">
         <div class="manual-add-row">
-          <input id="manualAddSearch" list="allProductsList" placeholder="Type product name or code to add manually…" autocomplete="off">
+          <input id="manualAddSearch" placeholder="Search &amp; select products to add to the reorder list…" autocomplete="off">
           <datalist id="allProductsList"></datalist>
           <button class="dl-btn" id="manualAddBtn"><span class="icn">+</span> Add</button>
         </div>

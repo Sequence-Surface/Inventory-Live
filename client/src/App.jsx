@@ -2,30 +2,17 @@ import { useEffect, useRef, useState } from 'react';
 import { DASHBOARD_HTML } from './dashboard.markup.js';
 import { bootstrapDashboard } from './lib/bootstrap.js';
 
-// Skeleton shown while the dataset loads from the backend (the /api/data fetch can be several MB).
-// It roughly mirrors the dashboard layout — header, KPI row, charts, and a table — with a shimmer.
+// Branded loader shown while the dataset loads from the backend (after sign-in).
+// Theme-aware: it uses the same tokens as the app, so it matches the chosen look.
 function DashboardSkeleton() {
   return (
-    <div id="appSkeleton" aria-hidden="true">
-      <div className="sk sk-title" />
-      <div className="sk sk-subtitle" />
-      <div className="sk-kpis">
-        {Array.from({ length: 8 }).map((_, i) => (
-          <div className="sk sk-kpi" key={i} />
-        ))}
+    <div id="appLoader" aria-hidden="true">
+      <div className="loader-logo">&#9672;</div>
+      <div className="loader-name">
+        Inventory <em>Intelligence</em>
       </div>
-      <div className="sk-charts">
-        <div className="sk sk-chart-lg" />
-        <div className="sk sk-chart-sm" />
-        <div className="sk sk-chart-sm" />
-      </div>
-      <div className="sk sk-tablebar" />
-      <div className="sk-table">
-        {Array.from({ length: 8 }).map((_, i) => (
-          <div className="sk sk-trow" key={i} />
-        ))}
-      </div>
-      <div className="sk-note">Loading your data from the database…</div>
+      <div className="loader-bar" />
+      <div className="loader-text">Loading your data…</div>
     </div>
   );
 }

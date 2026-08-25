@@ -140,7 +140,7 @@
   .panel-sub { color: var(--text-3); font-size: 11px; font-family: var(--mono); margin-bottom: 20px; }
   .chart-wrap { position: relative; height: 280px; }
   .chart-wrap.tall { height: 360px; }
-  .chart-wrap.xtall { height: 420px; }
+  .chart-wrap.xtall { height: 320px; }
 
   .insight { background: linear-gradient(135deg, rgba(139,124,255,0.06) 0%, transparent 60%); border: 1px solid var(--line); border-left: 3px solid var(--accent); padding: 20px 24px; margin-bottom: 16px; display: flex; gap: 20px; align-items: center; }
   .insight-icon { font-family: var(--display); font-size: 28px; color: var(--accent); font-style: italic; line-height: 1; }

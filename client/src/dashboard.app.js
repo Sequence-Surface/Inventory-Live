@@ -494,22 +494,48 @@ function renderHeaderAndCharts() {
   const k = D.kpi || {};
   const M = D.months || [];
   const salesWindowSub = M.length >= 12 ? `${M[M.length - 12]} — ${M[M.length - 1]}` : (M.length ? `${M[0]} — ${M[M.length - 1]}` : '');
+  const KICON = {
+    box: '<path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
+    trend: '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>',
+    archive: '<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>',
+    award: '<circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/>',
+    cart: '<circle cx="8" cy="21" r="1"/><circle cx="19" cy="21" r="1"/><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"/>',
+    alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+    pulse: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
+    clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  };
   const kpiHtml = [
-    { label: 'Parents · Children', value: fmt(k.totalProducts) + ' · ' + fmt(k.totalChildren), sub: k.totalFolders + ' folders · ' + k.totalCategories + ' categories', cls: '' },
-    { label: 'Annual sales (units)', value: fmt(k.annualSales), sub: salesWindowSub, cls: 'good' },
-    { label: 'On hand · Pipeline', value: fmt(k.totalStock), sub: '+' + fmt(k.inTransitTotal) + ' transit · +' + fmt(k.pendingTotal) + ' pending', cls: 'info' },
-    { label: 'Class A SKUs', value: fmt(k.classACount), sub: '80% of revenue · ' + (k.totalProducts ? Math.round(k.classACount/k.totalProducts*100) : 0) + '% of SKUs', cls: 'info' },
-    { label: 'Net reorder need', value: fmt(k.netReorderQty), sub: fmt(k.netReorderProducts) + ' SKUs · saved ' + fmt(k.reorderSavedByPipeline) + ' from pipeline', cls: 'warn' },
-    { label: 'Critical stock', value: fmt(k.criticalCount), sub: 'less than 15 days cover · ' + fmt(k.criticalImprovedCount) + ' covered by pipeline', cls: 'danger' },
-    { label: 'Bulk-order anomalies', value: fmt(k.bulkAnomalyCount), sub: 'unusual purchase spikes', cls: 'warn' },
-    { label: 'Slow / Non-moving', value: fmt(k.slowMoverCount), sub: fmt(k.nonMovingUnits) + ' units stuck', cls: 'danger' },
+    { label: 'Products', value: fmt(k.totalProducts), sub: fmt(k.totalChildren) + ' child codes · ' + k.totalFolders + ' folders', cls: '', icon: KICON.box, drill: 'all' },
+    { label: 'Annual sales', value: fmt(k.annualSales), sub: 'units · ' + salesWindowSub, cls: 'good', icon: KICON.trend, drill: 'sales' },
+    { label: 'On hand', value: fmt(k.totalStock), sub: '+' + fmt(k.inTransitTotal) + ' transit · +' + fmt(k.pendingTotal) + ' pending', cls: 'info', icon: KICON.archive, drill: 'all' },
+    { label: 'Class A SKUs', value: fmt(k.classACount), sub: '80% of revenue · ' + (k.totalProducts ? Math.round(k.classACount/k.totalProducts*100) : 0) + '% of SKUs', cls: 'info', icon: KICON.award, drill: 'classA' },
+    { label: 'Reorder need', value: fmt(k.netReorderQty), sub: fmt(k.netReorderProducts) + ' SKUs · saved ' + fmt(k.reorderSavedByPipeline) + ' via pipeline', cls: 'warn', icon: KICON.cart, drill: 'reorder' },
+    { label: 'Critical stock', value: fmt(k.criticalCount), sub: 'under 15 days cover', cls: 'danger', icon: KICON.alert, drill: 'critical' },
+    { label: 'Bulk anomalies', value: fmt(k.bulkAnomalyCount), sub: 'unusual purchase spikes', cls: 'warn', icon: KICON.pulse, drill: 'bulk' },
+    { label: 'Slow movers', value: fmt(k.slowMoverCount), sub: fmt(k.nonMovingUnits) + ' units stuck', cls: 'danger', icon: KICON.clock, drill: 'slow' },
   ];
-  document.getElementById('kpis').innerHTML = kpiHtml.map((x, i) =>
-    `<div class="kpi ${x.cls} reveal reveal-${(i % 3) + 1}">
-      <div class="kpi-label">${x.label}</div>
+  document.getElementById('kpis').innerHTML = kpiHtml.map((x) =>
+    `<div class="kpi ${x.cls}" data-drill="${x.drill}" title="Click to view the matching products">
+      <div class="kpi-head">
+        <span class="kpi-icn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${x.icon}</svg></span>
+        <span class="kpi-label">${x.label}</span>
+      </div>
       <div class="kpi-value">${x.value}</div>
       <div class="kpi-sub">${x.sub}</div>
     </div>`).join('');
+  // Click-to-view: each KPI opens the Action Centre pre-filtered to its rows.
+  document.querySelectorAll('#kpis .kpi[data-drill]').forEach(card => {
+    card.addEventListener('click', () => {
+      const d = card.dataset.drill;
+      if (d === 'reorder') drillToActions(() => drillSelectTab('reorder'));
+      else if (d === 'bulk') drillToActions(() => drillSelectTab('bulk'));
+      else if (d === 'slow') drillToActions(() => drillSelectTab('slow'));
+      else if (d === 'critical') drillToActions(() => drillSelectStatus(STATUS.indexOf('Critical')));
+      else if (d === 'classA') drillToActions(() => drillSelectAbc(0));
+      else if (d === 'sales') drillToActions(() => { currentView = 'sales'; const vs = document.getElementById('viewSelect'); if (vs) vs.value = 'sales'; });
+      else drillToActions();
+    });
+  });
 
   document.getElementById('aggInsightText').innerHTML =
     `Across all SKUs, total purchases of <strong>${fmt(D.aggP.reduce((a,b)=>a+b,0))}</strong> units against sales of <strong>${fmt(D.aggS.reduce((a,b)=>a+b,0))}</strong> units in 24 months. Class A drives <strong>${fmt(k.classASales)}</strong> units (<strong>${k.annualSales ? Math.round(k.classASales/k.annualSales*100) : 0}%</strong>) from just <strong>${fmt(k.classACount)}</strong> SKUs.`;
@@ -539,6 +565,14 @@ function renderHeaderAndCharts() {
     },
     options: {
       responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+      // Click a month → Action Centre custom-ranged to exactly that month.
+      onClick: (evt, els, chart) => {
+        const pts = chart.getElementsAtEventForMode(evt, 'index', { intersect: false }, true);
+        if (!pts.length) return;
+        const idx = pts[0].index;
+        drillToActions(() => { drillSelectMonth(idx); currentView = 'both'; const vs = document.getElementById('viewSelect'); if (vs) vs.value = 'both'; });
+      },
+      onHover: (evt, els, chart) => { chart.canvas.style.cursor = els.length ? 'pointer' : 'default'; },
       plugins: { legend: { labels: { color: cLegend, font: { family: 'JetBrains Mono', size: 10 }, boxWidth: 12 } }, tooltip: tooltipStyle() },
       scales: {
         x: { grid: { color: cGrid }, ticks: { color: cTick, font: { family: 'JetBrains Mono', size: 10 } } },
@@ -555,6 +589,9 @@ function renderHeaderAndCharts() {
     type: 'doughnut',
     data: { labels: statusOrder, datasets: [{ data: statusOrder.map(s => statusCount[s] || 0), backgroundColor: statusOrder.map(s => statusColors[s]), borderWidth: 0, hoverOffset: 8 }] },
     options: { responsive: true, maintainAspectRatio: false, cutout: '62%',
+      // Click a slice → Action Centre filtered to that stock status.
+      onClick: (evt, els) => { if (els.length) { const label = statusOrder[els[0].index]; drillToActions(() => drillSelectStatus(STATUS.indexOf(label))); } },
+      onHover: (evt, els, chart) => { chart.canvas.style.cursor = els.length ? 'pointer' : 'default'; },
       plugins: { legend: { position: 'bottom', labels: { color: cLegend, font: { family: 'JetBrains Mono', size: 9 }, boxWidth: 10, padding: 10 } },
         tooltip: { ...tooltipStyle(), callbacks: { label: c => c.label + ': ' + fmt(c.raw) } } } }
   });
@@ -563,6 +600,9 @@ function renderHeaderAndCharts() {
     type: 'doughnut',
     data: { labels: ['Class A', 'Class B', 'Class C'], datasets: [{ data: [k.classACount, k.classBCount, k.classCCount], backgroundColor: [cAccent, cAccent + '73', cMuted], borderWidth: 0, hoverOffset: 8 }] },
     options: { responsive: true, maintainAspectRatio: false, cutout: '62%',
+      // Click a slice → Action Centre filtered to that ABC class.
+      onClick: (evt, els) => { if (els.length) drillToActions(() => drillSelectAbc(els[0].index)); },
+      onHover: (evt, els, chart) => { chart.canvas.style.cursor = els.length ? 'pointer' : 'default'; },
       plugins: { legend: { position: 'bottom', labels: { color: cLegend, font: { family: 'JetBrains Mono', size: 9 }, boxWidth: 10, padding: 10 } },
         tooltip: { ...tooltipStyle(), callbacks: { label: c => c.label + ': ' + fmt(c.raw) + ' SKUs' } } } }
   });
@@ -575,6 +615,14 @@ function renderHeaderAndCharts() {
     type: 'doughnut',
     data: { labels: moverOrder, datasets: [{ data: moverOrder.map(m => moverCount[m] || 0), backgroundColor: moverOrder.map(m => moverColors[m]), borderWidth: 0, hoverOffset: 8 }] },
     options: { responsive: true, maintainAspectRatio: false, cutout: '62%',
+      // Click a slice → slow movers open the Slow tab; anything else, the full list.
+      onClick: (evt, els) => {
+        if (!els.length) return;
+        const label = moverOrder[els[0].index];
+        if (label.startsWith('Slow') || label.startsWith('Non-Moving') || label.startsWith('Sluggish')) drillToActions(() => drillSelectTab('slow'));
+        else drillToActions();
+      },
+      onHover: (evt, els, chart) => { chart.canvas.style.cursor = els.length ? 'pointer' : 'default'; },
       plugins: { legend: { position: 'bottom', labels: { color: cLegend, font: { family: 'JetBrains Mono', size: 9 }, boxWidth: 10, padding: 10 } },
         tooltip: { ...tooltipStyle(), callbacks: { label: c => c.label + ': ' + fmt(c.raw) + ' SKUs' } } } }
   });
@@ -925,32 +973,90 @@ function setupComboDropdown(inputId, cfg) {
 
 function _comboRerender() { currentPage = 0; reorderPage = 0; rerender(); }
 
+// Reset every filter (used by the Clear-all button AND by click-to-view drills).
+function clearAllFiltersSilently() {
+  selFilters.search.clear(); renderSearchChips();
+  selFilters.cat.clear(); renderCatChips();
+  selFilters.vendor.clear(); renderVendorChips();
+  selFilters.folder.clear(); renderFolderChips();
+  selFilters.abc.clear();
+  selFilters.status.clear();
+  selFilters.virtualStatus.clear();
+  document.querySelectorAll('#abcToggles .ms-toggle, #statusToggles .ms-toggle').forEach(b => b.classList.remove('active'));
+  ['searchCount', 'catCount', 'vendorCount', 'folderCount', 'abcCount', 'statusCount'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = '';
+  });
+  const sd = document.getElementById('statusDropBtn');
+  if (sd) sd.textContent = 'All statuses';
+  ['searchInput', 'catFilter', 'vendorFilter', 'folderFilter'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  // The four single-choice dropdown filters
+  selFilters.mover = ''; selFilters.demand = ''; selFilters.stockLvl = ''; selFilters.age = '';
+  [['moverFilterSel', 'moverCount2'], ['demandFilterSel', 'demandCount2'], ['stockLvlFilterSel', 'stockLvlCount2'], ['ageFilterSel', 'ageCount2']].forEach(([id, cid]) => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+    const c = document.getElementById(cid);
+    if (c) c.textContent = '';
+  });
+}
+
 // "Clear all filters" in the toolbar header — resets every filter at once.
 (function setupFilterClearAll() {
   const btn = document.getElementById('filterClearAll');
   if (!btn) return;
-  btn.addEventListener('click', () => {
-    selFilters.search.clear(); renderSearchChips();
-    selFilters.cat.clear(); renderCatChips();
-    selFilters.vendor.clear(); renderVendorChips();
-    selFilters.folder.clear(); renderFolderChips();
-    selFilters.abc.clear();
-    selFilters.status.clear();
-    selFilters.virtualStatus.clear();
-    document.querySelectorAll('#abcToggles .ms-toggle, #statusToggles .ms-toggle').forEach(b => b.classList.remove('active'));
-    ['searchCount', 'catCount', 'vendorCount', 'folderCount', 'abcCount', 'statusCount'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.textContent = '';
-    });
-    const sd = document.getElementById('statusDropBtn');
-    if (sd) sd.textContent = 'All statuses';
-    ['searchInput', 'catFilter', 'vendorFilter', 'folderFilter'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.value = '';
-    });
-    _comboRerender();
-  });
+  btn.addEventListener('click', () => { clearAllFiltersSilently(); _comboRerender(); });
 })();
+
+// ===== Click-to-view drill-downs =====
+// Anything summary-level (KPI cards, chart segments, chart months) jumps to the
+// Action Centre with the matching filter/tab applied, so the underlying rows
+// are one click away.
+function drillSelectStatus(idx) {
+  if (idx < 0) return;
+  selFilters.status.add(idx);
+  const b = document.querySelector(`#statusToggles .ms-toggle[data-val="${idx}"]`);
+  if (b) b.classList.add('active');
+  _updateStatusCount();
+  const sd = document.getElementById('statusDropBtn');
+  if (sd) sd.textContent = '1 status selected';
+}
+function drillSelectAbc(idx) {
+  selFilters.abc.add(idx);
+  const b = document.querySelector(`#abcToggles .ms-toggle[data-val="${idx}"]`);
+  if (b) b.classList.add('active');
+  const c = document.getElementById('abcCount');
+  if (c) c.textContent = '(1)';
+}
+function drillSelectTab(tab) {
+  const t = document.querySelector(`.tab[data-tab="${tab}"]`);
+  if (t) t.click();
+}
+function drillSelectMonth(slotIdx) {
+  currentPeriod = 'custom';
+  customStart = slotIdx; customEnd = slotIdx;
+  const ps = document.getElementById('periodSelect');
+  if (ps) ps.value = 'custom';
+  const cr = document.getElementById('customRange');
+  if (cr) cr.classList.add('show');
+  const s = document.getElementById('customStart'), e = document.getElementById('customEnd');
+  if (s) s.value = String(slotIdx);
+  if (e) e.value = String(slotIdx);
+}
+function drillToActions(setup) {
+  clearAllFiltersSilently();
+  drillSelectTab('monthly');
+  if (typeof setup === 'function') setup();
+  currentPage = 0; reorderPage = 0;
+  window.location.hash = '#/actions';
+  rerender();
+  setTimeout(() => {
+    const el = document.getElementById('section4Panel');
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 180);
+}
 
 setupComboDropdown('searchInput', {
   getOptions(q) {
@@ -1890,6 +1996,11 @@ const selFilters = {
   folder: new Set(),  // Set of folder indices (D.folders)
   search: new Set(),  // Set of lowercase search-term strings (multi-select chips)
   virtualStatus: new Set(),  // 'pna' and/or 'disc' — overlays on top of regular status filter
+  // Single-choice dropdown filters ('' = off)
+  mover: '',      // MOVERS label, e.g. 'Slow (6-12m)'
+  demand: '',     // demand class: smooth|trending|intermittent|lumpy|erratic|dead
+  stockLvl: '',   // instock|outstock|pipeline|cover15|cover30|over180
+  age: '',        // new3|young6|est
 };
 
 function getFilteredProducts() {
@@ -1922,9 +2033,49 @@ function getFilteredProducts() {
       const matchesAny = (wantsPna && isPNA(p)) || (wantsDisc && isDiscontinued(p));
       if (!matchesAny) return false;
     }
+    // Movement (mover status)
+    if (selFilters.mover && MOVERS[p.mv] !== selFilters.mover) return false;
+    // Demand shape (cached by precomputeDemandMeta)
+    if (selFilters.demand && (!p._dc || p._dc.class !== selFilters.demand)) return false;
+    // Stock level
+    if (selFilters.stockLvl) {
+      const k = p.k || 0, pipe = (p.it || 0) + (p.po || 0), ad = p.ad;
+      const lvl = selFilters.stockLvl;
+      if (lvl === 'instock' && k <= 0) return false;
+      if (lvl === 'outstock' && k > 0) return false;
+      if (lvl === 'pipeline' && pipe <= 0) return false;
+      if (lvl === 'cover15' && !(ad < 15)) return false;
+      if (lvl === 'cover30' && !(ad < 30)) return false;
+      if (lvl === 'over180' && !(ad > 180 && ad < 999)) return false;
+    }
+    // Product age (months since launch)
+    if (selFilters.age) {
+      const pa = p.pa == null ? 24 : p.pa;
+      if (selFilters.age === 'new3' && pa > 3) return false;
+      if (selFilters.age === 'young6' && pa > 6) return false;
+      if (selFilters.age === 'est' && pa <= 6) return false;
+    }
     return true;
   });
 }
+
+// Wire the four single-choice dropdown filters.
+[
+  { id: 'moverFilterSel', key: 'mover', count: 'moverCount2' },
+  { id: 'demandFilterSel', key: 'demand', count: 'demandCount2' },
+  { id: 'stockLvlFilterSel', key: 'stockLvl', count: 'stockLvlCount2' },
+  { id: 'ageFilterSel', key: 'age', count: 'ageCount2' },
+].forEach(({ id, key, count }) => {
+  const sel = document.getElementById(id);
+  if (!sel) return;
+  sel.addEventListener('change', () => {
+    selFilters[key] = sel.value;
+    const c = document.getElementById(count);
+    if (c) c.textContent = sel.value ? '(1)' : '';
+    currentPage = 0; reorderPage = 0;
+    rerender();
+  });
+});
 
 // ===== Manual reorder additions =====
 const manualReorderIds = new Set();
@@ -2150,18 +2301,17 @@ function renderPlanningInfo() {
   }
 }
 
-// Planning-days toggle (Reorder Now tab)
-document.querySelectorAll('#planningGroup .btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('#planningGroup .btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    const d = btn.dataset.days;
-    planningDays = d === 'abc' ? 'abc' : parseInt(d);
+// Planning-days dropdown (Reorder Now tab)
+(function setupPlanningSelect() {
+  const sel = document.getElementById('planningSelect');
+  if (!sel) return;
+  sel.addEventListener('change', () => {
+    planningDays = sel.value === 'abc' ? 'abc' : parseInt(sel.value);
     reorderPage = 0;
     renderPlanningInfo();
     rerender();
   });
-});
+})();
 renderPlanningInfo();  // initial render
 
 // Reorder scope toggle (Reorder Now tab)
@@ -2241,16 +2391,16 @@ function renderScopeInfo() {
   }
 }
 
-document.querySelectorAll('#reorderScopeGroup .btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('#reorderScopeGroup .btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    reorderScope = btn.dataset.scope;
+(function setupScopeSelect() {
+  const sel = document.getElementById('reorderScopeSelect');
+  if (!sel) return;
+  sel.addEventListener('change', () => {
+    reorderScope = sel.value;
     reorderPage = 0;
     renderScopeInfo();
     rerender();
   });
-});
+})();
 renderScopeInfo();  // initial render
 
 // Demand basis info — single-line summary per method + [more] toggle for full details
@@ -2324,24 +2474,18 @@ function renderDemandInfo() {
   }
 }
 
-// Demand basis toggle — controls how monthly demand is estimated from sales history
+// Demand basis dropdown — controls how monthly demand is estimated from sales history
 (function setupDemandBasis() {
-  const grp = document.getElementById('demandBasisGroup');
-  if (!grp) return;
-  // Restore active state from persisted preference
-  grp.querySelectorAll('.btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.method === demandMethod);
-  });
-  grp.querySelectorAll('.btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      grp.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      demandMethod = btn.dataset.method;
-      try { localStorage.setItem('inventoryDemandMethod', demandMethod); } catch (e) {}
-      reorderPage = 0;
-      renderDemandInfo();   // refresh info text for the new method
-      rerender();
-    });
+  const sel = document.getElementById('demandBasisSelect');
+  if (!sel) return;
+  // Restore the persisted preference
+  if ([...sel.options].some(o => o.value === demandMethod)) sel.value = demandMethod;
+  sel.addEventListener('change', () => {
+    demandMethod = sel.value;
+    try { localStorage.setItem('inventoryDemandMethod', demandMethod); } catch (e) {}
+    reorderPage = 0;
+    renderDemandInfo();   // refresh info text for the new method
+    rerender();
   });
   renderDemandInfo();  // initial render
 })();
@@ -2692,10 +2836,18 @@ function renderReorderMonthly(products) {
   const autoOnly = products.filter(p => p.r > 0).length;
   const manualOnlyCount = products.filter(p => isManualOnly(p)).length;
   const neededCount = products.filter(p => isManualOnly(p) || targetForP(p).need > 0).length;
-  document.getElementById('scopeNeededCount').textContent = '· ' + neededCount;
-  document.getElementById('scopeAutoCount').textContent = '· ' + autoOnly;
-  document.getElementById('scopeManualCount').textContent = '· ' + manualOnlyCount;
-  document.getElementById('scopeAllCount').textContent = '· ' + allInReorder;
+  // Counts live in the scope dropdown's option labels now.
+  const _scopeSel = document.getElementById('reorderScopeSelect');
+  if (_scopeSel) {
+    const setOpt = (val, label, n) => {
+      const o = _scopeSel.querySelector(`option[value="${val}"]`);
+      if (o) o.textContent = `${label} · ${n}`;
+    };
+    setOpt('needed', 'Need order now', neededCount);
+    setOpt('auto', 'Auto-flagged', autoOnly);
+    setOpt('manual', 'Manual added', manualOnlyCount);
+    setOpt('all', 'All', allInReorder);
+  }
 
   // Default 6M for compact layout — but respect global currentPeriod if set
   const [s, e] = getRange();
@@ -3607,6 +3759,48 @@ document.getElementById('manualAddSearch').addEventListener('keydown', (ev) => {
   if (ev.key === 'Enter') manualAddByName(ev.target.value);
 });
 
+// Search-and-select dropdown on the manual-add box (same pattern as the filters):
+// type to search all products, tick to add, tick again to remove a manual entry.
+setupComboDropdown('manualAddSearch', {
+  getOptions(q) {
+    let list = D.products;
+    if (q) list = list.filter(p => (p.n || '').toLowerCase().includes(q));
+    return list.slice(0, 500).map(p => ({
+      pid: p.i,
+      label: p.n,
+      sub: p.r > 0 ? 'auto-listed' : (manualReorderIds.has(p.i) ? 'added' : (D.cats[p.c] || '')),
+      selected: manualReorderIds.has(p.i) || p.r > 0,
+    }));
+  },
+  toggle(o) {
+    const status = document.getElementById('manualAddStatus');
+    const p = D.products.find(x => x.i === o.pid);
+    if (!p) return;
+    if (p.r > 0) {
+      if (status) { status.className = 'manual-status err'; status.textContent = `"${p.n}" is already on the auto-reorder list.`; }
+      return;
+    }
+    if (manualReorderIds.has(p.i)) {
+      manualReorderIds.delete(p.i);
+      saveManualReorder();
+      if (status) { status.className = 'manual-status ok'; status.textContent = `Removed "${p.n}" from your manual list.`; }
+      reorderPage = 0;
+      rerender();
+      return;
+    }
+    manualAddByName(p.n);
+  },
+  selectedCount: () => manualReorderIds.size,
+  clearAll() {
+    manualReorderIds.clear();
+    saveManualReorder();
+    const status = document.getElementById('manualAddStatus');
+    if (status) { status.className = 'manual-status ok'; status.textContent = 'Cleared all manually added products.'; }
+    reorderPage = 0;
+    rerender();
+  },
+});
+
 // Search input always re-renders; the multi-select chips/toggles already wire their own re-renders.
 document.getElementById('searchInput').addEventListener('input', () => {
   currentPage = 0; reorderPage = 0; rerender();
@@ -3650,6 +3844,50 @@ function downloadXlsx(filename, sheetName, rows) {
   ws['!cols'] = widths.map(w => ({ wch: Math.min(Math.max((w || 0) + 2, 10), 40) }));
   XLSX.utils.book_append_sheet(wb, ws, (sheetName || 'Sheet1').slice(0, 31));
   XLSX.writeFile(wb, filename);
+}
+
+// ===== Export preview modal =====
+// Every export button opens this first: a scrollable preview of the rows about
+// to be exported, with the Download action inside the modal.
+function showExportPreview({ title, fileName, rows, note, onDownload }) {
+  const old = document.getElementById('exportPreviewOverlay');
+  if (old) old.remove();
+  const esc = (x) => String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const headers = rows[0] || [];
+  const body = rows.slice(1);
+  const PREVIEW_MAX = 100;
+  const shown = body.slice(0, PREVIEW_MAX);
+  const overlay = document.createElement('div');
+  overlay.id = 'exportPreviewOverlay';
+  overlay.innerHTML = `
+    <div class="export-modal" role="dialog" aria-label="${esc(title)} preview">
+      <div class="export-modal-head">
+        <div>
+          <h3>${esc(title)}</h3>
+          <div class="export-modal-sub">${fmt(body.length)} row${body.length === 1 ? '' : 's'} · ${esc(fileName)}${note ? ' · ' + esc(note) : ''}</div>
+        </div>
+        <button type="button" class="ai-close" id="exportPreviewClose" aria-label="Close">×</button>
+      </div>
+      <div class="export-modal-body">
+        <div class="table-wrap" style="max-height: 52vh;">
+          <table>
+            <thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
+            <tbody>${shown.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody>
+          </table>
+        </div>
+        ${body.length > PREVIEW_MAX ? `<div class="export-modal-note">Showing first ${PREVIEW_MAX} of ${fmt(body.length)} rows — the download contains everything.</div>` : ''}
+      </div>
+      <div class="export-modal-foot">
+        <button type="button" class="dl-btn" id="exportPreviewCancel">Close</button>
+        <button type="button" class="dl-btn primary" id="exportPreviewDl"><span class="icn"><svg class="btn-icn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span> Download ${esc(fileName.endsWith('.xlsx') ? 'Excel' : 'CSV')}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector('#exportPreviewClose').addEventListener('click', close);
+  overlay.querySelector('#exportPreviewCancel').addEventListener('click', close);
+  overlay.querySelector('#exportPreviewDl').addEventListener('click', () => { onDownload(); close(); });
 }
 
 document.getElementById('dlReorder').addEventListener('click', () => {
@@ -3725,51 +3963,59 @@ document.getElementById('dlReorder').addEventListener('click', () => {
   });
 
   const stamp = new Date().toISOString().slice(0,10);
-  const useXlsx = (typeof XLSX !== 'undefined' && XLSX && XLSX.utils && XLSX.writeFile);
-  if (useXlsx) {
-    const wb = XLSX.utils.book_new();
+  showExportPreview({
+    title: 'Reorder Plan',
+    fileName: `Reorder_Plan_${stamp}.xlsx`,
+    rows: sheet1Rows,
+    note: `Excel adds an All-Vendors index + ${vendorEntries.length} per-vendor sheet${vendorEntries.length === 1 ? '' : 's'}`,
+    onDownload: () => {
+      const useXlsx = (typeof XLSX !== 'undefined' && XLSX && XLSX.utils && XLSX.writeFile);
+      if (useXlsx) {
+        const wb = XLSX.utils.book_new();
 
-    // Sheet 1: full detail (unchanged)
-    const ws1 = XLSX.utils.aoa_to_sheet(sheet1Rows);
-    XLSX.utils.book_append_sheet(wb, ws1, 'Reorder Plan');
+        // Sheet 1: full detail (unchanged)
+        const ws1 = XLSX.utils.aoa_to_sheet(sheet1Rows);
+        XLSX.utils.book_append_sheet(wb, ws1, 'Reorder Plan');
 
-    // Sheet 2: All-vendors index
-    const wsIdx = XLSX.utils.aoa_to_sheet(indexRows);
-    wsIdx['!cols'] = [{ wch: 14 }, { wch: 30 }, { wch: 12 }, { wch: 12 }];
-    usedNames.add('Reorder Plan');
-    usedNames.add('All Vendors');
-    XLSX.utils.book_append_sheet(wb, wsIdx, 'All Vendors');
+        // Sheet 2: All-vendors index
+        const wsIdx = XLSX.utils.aoa_to_sheet(indexRows);
+        wsIdx['!cols'] = [{ wch: 14 }, { wch: 30 }, { wch: 12 }, { wch: 12 }];
+        usedNames.add('Reorder Plan');
+        usedNames.add('All Vendors');
+        XLSX.utils.book_append_sheet(wb, wsIdx, 'All Vendors');
 
-    // One sheet per vendor
-    vendorEntries.forEach(v => {
-      const totalQty = v.rows.reduce((s, r) => s + (r[1] || 0), 0);
-      const aoa = [
-        [`Vendor: ${v.vendor.name || v.vendor.code}`, ''],
-        ['Vendor Code:', v.vendor.code || ''],
-        ['Generated:', dateStamp],
-        ['Total qty:', totalQty],
-        ['Line items:', v.rows.length],
-        [],
-        ['Parent Code', 'Quantity']
-      ];
-      v.rows.forEach(r => aoa.push(r));
-      const ws = XLSX.utils.aoa_to_sheet(aoa);
-      ws['!cols'] = [{ wch: 30 }, { wch: 12 }];
-      const baseName = sanitizeSheetName(v.vendor.name || v.vendor.code);
-      XLSX.utils.book_append_sheet(wb, ws, uniqueSheetName(baseName));
-    });
+        // One sheet per vendor
+        vendorEntries.forEach(v => {
+          const totalQty = v.rows.reduce((s, r) => s + (r[1] || 0), 0);
+          const aoa = [
+            [`Vendor: ${v.vendor.name || v.vendor.code}`, ''],
+            ['Vendor Code:', v.vendor.code || ''],
+            ['Generated:', dateStamp],
+            ['Total qty:', totalQty],
+            ['Line items:', v.rows.length],
+            [],
+            ['Parent Code', 'Quantity']
+          ];
+          v.rows.forEach(r => aoa.push(r));
+          const ws = XLSX.utils.aoa_to_sheet(aoa);
+          ws['!cols'] = [{ wch: 30 }, { wch: 12 }];
+          const baseName = sanitizeSheetName(v.vendor.name || v.vendor.code);
+          XLSX.utils.book_append_sheet(wb, ws, uniqueSheetName(baseName));
+        });
 
-    XLSX.writeFile(wb, `Reorder_Plan_${stamp}.xlsx`);
-  } else {
-    // Fallback if SheetJS is unavailable: one CSV for plan + one CSV per vendor
-    downloadCsv(`Reorder_Plan_${stamp}.csv`, sheet1Rows);
-    downloadCsv(`Reorder_All_Vendors_${stamp}.csv`, indexRows);
-    vendorEntries.forEach(v => {
-      const safe = (v.vendor.name || v.vendor.code || 'Vendor').replace(/[^\w]+/g, '_');
-      const rows = [['Parent Code', 'Quantity']].concat(v.rows);
-      downloadCsv(`Reorder_${safe}_${stamp}.csv`, rows);
-    });
-  }
+        XLSX.writeFile(wb, `Reorder_Plan_${stamp}.xlsx`);
+      } else {
+        // Fallback if SheetJS is unavailable: one CSV for plan + one CSV per vendor
+        downloadCsv(`Reorder_Plan_${stamp}.csv`, sheet1Rows);
+        downloadCsv(`Reorder_All_Vendors_${stamp}.csv`, indexRows);
+        vendorEntries.forEach(v => {
+          const safe = (v.vendor.name || v.vendor.code || 'Vendor').replace(/[^\w]+/g, '_');
+          const rows = [['Parent Code', 'Quantity']].concat(v.rows);
+          downloadCsv(`Reorder_${safe}_${stamp}.csv`, rows);
+        });
+      }
+    },
+  });
 });
 
 document.getElementById('dlSlow').addEventListener('click', () => {
@@ -3787,7 +4033,8 @@ document.getElementById('dlSlow').addEventListener('click', () => {
     return [MOVERS[p.mv], v.code, v.name, D.folders[p.fl], p.i, p.n, D.cats[p.c] || '', ABCS[p.b],
             p.k, p.ms >= 13 ? '13+' : p.ms, p.a, p.t === 99 ? '∞' : p.t.toFixed(2), action, childCodes];
   }));
-  downloadCsv(`Slow_NonMoving_${new Date().toISOString().slice(0,10)}.csv`, rows);
+  const slowFile = `Slow_NonMoving_${new Date().toISOString().slice(0,10)}.csv`;
+  showExportPreview({ title: 'Slow / Non-Moving', fileName: slowFile, rows, onDownload: () => downloadCsv(slowFile, rows) });
 });
 
 document.getElementById('dlOver').addEventListener('click', () => {
@@ -3800,7 +4047,8 @@ document.getElementById('dlOver').addEventListener('click', () => {
     return [v.code, v.name, D.folders[p.fl], p.i, p.n, D.cats[p.c] || '', ABCS[p.b],
             p.k, p.m, p.d >= 999 ? '∞' : p.d, p.a, p.t === 99 ? '∞' : p.t.toFixed(2), 'Pause reorders / Reduce', childCodes];
   }));
-  downloadCsv(`Overstocked_${new Date().toISOString().slice(0,10)}.csv`, rows);
+  const overFile = `Overstocked_${new Date().toISOString().slice(0,10)}.csv`;
+  showExportPreview({ title: 'Overstocked', fileName: overFile, rows, onDownload: () => downloadCsv(overFile, rows) });
 });
 
 document.getElementById('dlMonthly').addEventListener('click', () => {
@@ -3821,7 +4069,8 @@ document.getElementById('dlMonthly').addEventListener('click', () => {
       rows.push(meta.concat(['Purchases']).concat(purch).concat([purch.reduce((a,b)=>a+b,0)]));
     }
   });
-  downloadCsv(`Monthly_${currentView}_${new Date().toISOString().slice(0,10)}.csv`, rows);
+  const monthlyFile = `Monthly_${currentView}_${new Date().toISOString().slice(0,10)}.csv`;
+  showExportPreview({ title: 'Current Monthly View', fileName: monthlyFile, rows, onDownload: () => downloadCsv(monthlyFile, rows) });
 });
 
 document.getElementById('dlMaster').addEventListener('click', () => {
@@ -3844,7 +4093,8 @@ document.getElementById('dlMaster').addEventListener('click', () => {
       rows.push([p.i, p.n, pld, v.name, v.code, cat, sub, parentFolder, ch.code, ch.launchDate || '', ch.folder, ABCS[p.b], zoneStrFor(ch.folder)]);
     });
   });
-  downloadCsv(`Master_ParentChild_${new Date().toISOString().slice(0,10)}.csv`, rows);
+  const masterFile = `Master_ParentChild_${new Date().toISOString().slice(0,10)}.csv`;
+  showExportPreview({ title: 'Master Parent-Child List', fileName: masterFile, rows, onDownload: () => downloadCsv(masterFile, rows) });
 });
 
 document.getElementById('dlFolder').addEventListener('click', () => {
